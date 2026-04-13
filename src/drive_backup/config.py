@@ -27,6 +27,7 @@ class Config:
         "*.tmp", "*.lnk",
     ])
     exclude_path_patterns: list[str] = field(default_factory=list)
+    exclude_specific_files: list[str] = field(default_factory=list)
     exclude_symlinks: bool = True
     max_file_size_mb: float = 500
     size_limits_by_type: dict[str, float] = field(default_factory=lambda: {

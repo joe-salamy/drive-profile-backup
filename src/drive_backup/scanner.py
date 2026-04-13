@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Iterator
+
+_WIN32 = sys.platform == "win32"
+_MAX_PATH = 260
 
 from drive_backup.config import Config
 
@@ -57,6 +61,25 @@ def _is_excluded_file(name: str, exclude_files: list[str]) -> bool:
         if fnmatch(name, pattern):
             return True
     return False
+
+
+def _truncate_relative_path(rel_path: str, max_len: int = _MAX_PATH) -> str:
+    """Truncate the filename stem so the full relative path fits within *max_len* chars."""
+    if len(rel_path) <= max_len:
+        return rel_path
+    directory, filename = os.path.split(rel_path)
+    stem, ext = os.path.splitext(filename)
+    # How much room is left for the stem after dir + separator + ext?
+    overhead = len(ext)
+    if directory:
+        overhead += len(directory) + 1  # +1 for the separator
+    max_stem = max_len - overhead
+    if max_stem < 1:
+        max_stem = 1
+    truncated = stem[:max_stem]
+    if directory:
+        return f"{directory}/{truncated}{ext}"
+    return f"{truncated}{ext}"
 
 
 def _is_excluded_by_path(rel_path: str, patterns: list[str]) -> bool:
@@ -112,6 +135,13 @@ def scan(config: Config) -> Iterator[FileEntry]:
                 # Can happen with paths on different drives
                 rel_path = full_path.replace("\\", "/")
 
+            # On Windows, paths >= 260 chars need the \\?\ prefix for I/O
+            if _WIN32 and len(full_path) >= _MAX_PATH:
+                full_path = "\\\\?\\" + full_path
+                # Truncate the filename in the relative path so Drive
+                # receives a name within the 260-char limit.
+                rel_path = _truncate_relative_path(rel_path)
+
             # Try to stat the file
             try:
                 stat = os.stat(full_path)
@@ -150,6 +180,18 @@ def scan(config: Config) -> Iterator[FileEntry]:
                     mtime=mtime,
                     is_skipped=True,
                     skip_reason="excluded_by_path_pattern",
+                )
+                continue
+
+            # Check specific file exclusions (exact relative path match)
+            if rel_path in config.exclude_specific_files:
+                yield FileEntry(
+                    path=full_path,
+                    relative_path=rel_path,
+                    size=size,
+                    mtime=mtime,
+                    is_skipped=True,
+                    skip_reason="excluded_by_specific_file",
                 )
                 continue
 

@@ -12,14 +12,14 @@ exclude_dirs:
   - ".git"
   - "__pycache__"
   - "node_modules"
-  - "AppData"          # Caches, temp files, app internals — usually 50+ GB
-  - ".local"           # Claude Code binaries (~719 MB, auto-downloaded)
-  - ".cache"           # Selenium browser binaries, pip caches — all re-downloadable
-  - ".vscode"          # VS Code extensions (~374 MB, 12k+ files) — re-installable
-  - "edge_selenium_profile"  # Browser cache + ML models from room-reserver
-  - ".azure-functions-core-tools"  # Dev tool cache (~180 MB, re-downloadable)
-  - ".copilot"         # GitHub Copilot cache (~115 MB, re-downloadable)
-  - ".docker"          # Docker Desktop cache (~72 MB, re-downloadable)
+  - "AppData" # Caches, temp files, app internals — usually 50+ GB
+  - ".local" # Claude Code binaries (~719 MB, auto-downloaded)
+  - ".cache" # Selenium browser binaries, pip caches — all re-downloadable
+  - ".vscode" # VS Code extensions (~374 MB, 12k+ files) — re-installable
+  - "edge_selenium_profile" # Browser cache + ML models from room-reserver
+  - ".azure-functions-core-tools" # Dev tool cache (~180 MB, re-downloadable)
+  - ".copilot" # GitHub Copilot cache (~115 MB, re-downloadable)
+  - ".docker" # Docker Desktop cache (~72 MB, re-downloadable)
   - ".tox"
   - ".mypy_cache"
   - ".pytest_cache"
@@ -38,7 +38,21 @@ exclude_files:
 
 # Path patterns to exclude (matched against relative path using wildcards)
 exclude_path_patterns:
-  - "*/open-law-notes/*.wav"  # Duplicate .wav copies of .m4a lecture recordings
+  - "*/open-law-notes/*.wav" # Duplicate .wav copies of .m4a lecture recordings
+
+# Specific files to exclude (exact relative paths, forward slashes)
+exclude_specific_files:
+  - "Documents/Net Present AI/Miller Ink/Zips/Work Product (1).zip"
+  - "Documents/Law school/z Archive/1L Fall/LRW/Class materials/Class 7/Intro to BB.pptx"
+  - "Documents/Law school/Quant Methods/Weeks/10/PS9/CC/Family law division 2017-26.dta"
+  - "Documents/Law school/Quant Methods/Weeks/11/PS10/data/LASC family division data - 2nd edition.dta"
+  - "Documents/Sound Recordings/Torts review session 12-1..m4a"
+  - "Documents/Net Present AI/Miller Ink/Folders/American Jewish University/Messaging/Messaging Architecture/Visioning Conversation/New Recording 2.m4a"
+  - "Documents/Sound Recordings/Recording (2).m4a"
+  - "Documents/Law school/LRW/files/Bluebook 21st.pdf"
+  - "Documents/Law school/z Archive/1L Fall/LRW/Bluebook_ocr.pdf"
+  - "Documents/Net Present AI/Miller Ink/Zips/Advertising.zip"
+  - "Documents/Law school/Quant Methods/z_archive/2025 Materials/Papers/Paper Assignment 1/Effective graphics.pptx"
 
 # Skip symlinks and NTFS junction points (prevents infinite loops)
 exclude_symlinks: true
@@ -49,11 +63,11 @@ max_file_size_mb: 500
 # Per-extension size limits in MB (overrides max_file_size_mb)
 # Set to 0 to skip that file type entirely
 size_limits_by_type:
-  ".iso": 0            # Disk images — skip entirely
-  ".exe": 0            # Executables — easily re-downloaded
-  ".msi": 0            # Installers — easily re-downloaded
-  ".dll": 0            # Shared libraries — bundled with apps, re-downloadable
-  ".ort": 0            # ONNX Runtime models — large ML artifacts, re-downloadable
+  ".iso": 0 # Disk images — skip entirely
+  ".exe": 0 # Executables — easily re-downloaded
+  ".msi": 0 # Installers — easily re-downloaded
+  ".dll": 0 # Shared libraries — bundled with apps, re-downloadable
+  ".ort": 0 # ONNX Runtime models — large ML artifacts, re-downloadable
 
 # Extensions that are NEVER size-limited (personal media to preserve)
 no_size_limit:
