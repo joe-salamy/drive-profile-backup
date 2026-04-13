@@ -39,15 +39,14 @@ Edit `config.yaml` to set your backup root, exclusions, and size limits.
 ### Backup (`drive-backup`)
 
 ```bash
-drive-backup [--dry-run] [--full] [--config PATH] [--verbose]
+drive-backup [--dry-run] [--full] [--verbose]
 ```
 
-| Flag | Description |
-| ---- | ----------- |
-| `--dry-run` | Scan and report only — no files are uploaded. Shows what *would* be uploaded and saves a JSON report to `~/.drive-backup/reports/`. |
-| `--full` | Ignore the local manifest and re-upload every eligible file, even if it hasn't changed since the last run. |
-| `--config PATH` | Path to `config.yaml`. Defaults to `./config.yaml` in the current directory. |
-| `--verbose` | Print each file as it is processed, including skip reasons and upload actions. Also sets log level to DEBUG. |
+| Flag            | Description                                                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`     | Scan and report only — no files are uploaded. Shows what _would_ be uploaded and saves a JSON report to `~/.drive-backup/reports/`. |
+| `--full`        | Ignore the local manifest and re-upload every eligible file, even if it hasn't changed since the last run.                          |
+| `--verbose`     | Print each file as it is processed, including skip reasons and upload actions. Also sets log level to DEBUG.                        |
 
 Examples:
 
@@ -67,13 +66,12 @@ drive-backup --full
 Scans the profile and writes a markdown summary to `docs/profile-summary-YYYY-MM-DD.md` with breakdowns by root folder, file type, top 25 largest files, skipped file reasons, and errors.
 
 ```bash
-python scripts/generate_summary.py [--config PATH] [--out DIR]
+python scripts/generate_summary.py [--out DIR]
 ```
 
-| Flag | Description |
-| ---- | ----------- |
-| `--config PATH` | Path to `config.yaml`. Defaults to `./config.yaml`. |
-| `--out DIR` | Output directory for the markdown file. Defaults to `docs/`. |
+| Flag            | Description                                                  |
+| --------------- | ------------------------------------------------------------ |
+| `--out DIR`     | Output directory for the markdown file. Defaults to `docs/`. |
 
 Example:
 
