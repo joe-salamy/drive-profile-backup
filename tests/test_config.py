@@ -64,9 +64,7 @@ class TestLoadConfig:
             "max_file_size_mb": 100,
             "exclude_dirs": ["custom_dir"],
         }
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(data, f)
             f.flush()
             config = load_config(f.name)
@@ -79,9 +77,7 @@ class TestLoadConfig:
 
     def test_load_partial_yaml_keeps_other_defaults(self):
         data = {"max_file_size_mb": 200}
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(data, f)
             f.flush()
             config = load_config(f.name)

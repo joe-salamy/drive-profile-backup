@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -14,32 +15,65 @@ class Config:
     """All backup configuration, with sensible defaults."""
 
     backup_root: str = ""
-    exclude_dirs: list[str] = field(default_factory=lambda: [
-        "venv", ".venv", "env",
-        ".git", "__pycache__", "node_modules",
-        "AppData",
-        ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-        ".claude", "scoop",
-    ])
-    exclude_files: list[str] = field(default_factory=lambda: [
-        "NTUSER.DAT*", "ntuser.*",
-        "Thumbs.db", "desktop.ini",
-        "*.tmp", "*.lnk",
-    ])
+    exclude_dirs: list[str] = field(
+        default_factory=lambda: [
+            "venv",
+            ".venv",
+            "env",
+            ".git",
+            "__pycache__",
+            "node_modules",
+            "AppData",
+            ".tox",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".claude",
+            "scoop",
+        ]
+    )
+    exclude_files: list[str] = field(
+        default_factory=lambda: [
+            "NTUSER.DAT*",
+            "ntuser.*",
+            "Thumbs.db",
+            "desktop.ini",
+            "*.tmp",
+            "*.lnk",
+        ]
+    )
     exclude_path_patterns: list[str] = field(default_factory=list)
     exclude_specific_files: list[str] = field(default_factory=list)
     exclude_symlinks: bool = True
     max_file_size_mb: float = 500
-    size_limits_by_type: dict[str, float] = field(default_factory=lambda: {
-        ".iso": 0,
-        ".exe": 0,
-        ".msi": 0,
-    })
-    no_size_limit: list[str] = field(default_factory=lambda: [
-        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".webp",
-        ".mp4", ".mov", ".avi", ".mkv", ".wmv",
-        ".mp3", ".wav", ".flac", ".aac", ".ogg",
-    ])
+    size_limits_by_type: dict[str, float] = field(
+        default_factory=lambda: {
+            ".iso": 0,
+            ".exe": 0,
+            ".msi": 0,
+        }
+    )
+    no_size_limit: list[str] = field(
+        default_factory=lambda: [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".heic",
+            ".webp",
+            ".mp4",
+            ".mov",
+            ".avi",
+            ".mkv",
+            ".wmv",
+            ".mp3",
+            ".wav",
+            ".flac",
+            ".aac",
+            ".ogg",
+        ]
+    )
     drive_folder_name: str = "Profile Backup"
     manifest_path: str = "~/.drive-backup/manifest.json"
     credentials_path: str = "credentials.json"
@@ -60,8 +94,7 @@ class Config:
 
         # Normalize extensions to lowercase with leading dot
         self.no_size_limit = [
-            ext if ext.startswith(".") else f".{ext}"
-            for ext in self.no_size_limit
+            ext if ext.startswith(".") else f".{ext}" for ext in self.no_size_limit
         ]
         self.size_limits_by_type = {
             (ext if ext.startswith(".") else f".{ext}"): limit
@@ -103,7 +136,7 @@ def load_config(path: str | Path) -> Config:
         data = yaml.safe_load(f) or {}
 
     # Map YAML keys to Config fields
-    kwargs: dict = {}
+    kwargs: dict[str, Any] = {}
     for key in Config.__dataclass_fields__:
         if key in data:
             kwargs[key] = data[key]

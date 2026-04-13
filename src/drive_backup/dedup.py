@@ -8,7 +8,6 @@ import logging
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 
 from drive_backup.scanner import FileEntry
 
@@ -69,8 +68,7 @@ class Manifest:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "file_count": len(self.entries),
             "files": {
-                rel_path: asdict(entry)
-                for rel_path, entry in self.entries.items()
+                rel_path: asdict(entry) for rel_path, entry in self.entries.items()
             },
         }
 

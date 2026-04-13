@@ -10,10 +10,10 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Iterator
 
+from drive_backup.config import Config
+
 _WIN32 = sys.platform == "win32"
 _MAX_PATH = 260
-
-from drive_backup.config import Config
 
 logger = logging.getLogger(__name__)
 

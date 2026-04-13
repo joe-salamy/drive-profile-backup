@@ -4,7 +4,7 @@ import os
 import tempfile
 
 from drive_backup.config import Config
-from drive_backup.scanner import scan
+from drive_backup.scanner import FileEntry, _truncate_relative_path, scan
 
 
 class TestScanner:
@@ -19,10 +19,13 @@ class TestScanner:
 
     def test_basic_scan_finds_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {
-                "file1.txt": "hello",
-                "subdir/file2.txt": "world",
-            })
+            self._make_tree(
+                tmp,
+                {
+                    "file1.txt": "hello",
+                    "subdir/file2.txt": "world",
+                },
+            )
             config = Config(backup_root=tmp, exclude_dirs=[], exclude_files=[])
             entries = list(scan(config))
 
@@ -33,11 +36,14 @@ class TestScanner:
 
     def test_excludes_directories(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {
-                "keep.txt": "keep",
-                "venv/lib/something.py": "skip",
-                "__pycache__/cached.pyc": "skip",
-            })
+            self._make_tree(
+                tmp,
+                {
+                    "keep.txt": "keep",
+                    "venv/lib/something.py": "skip",
+                    "__pycache__/cached.pyc": "skip",
+                },
+            )
             config = Config(
                 backup_root=tmp,
                 exclude_dirs=["venv", "__pycache__"],
@@ -52,11 +58,14 @@ class TestScanner:
 
     def test_excludes_file_patterns(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {
-                "keep.txt": "keep",
-                "Thumbs.db": "skip",
-                "desktop.ini": "skip",
-            })
+            self._make_tree(
+                tmp,
+                {
+                    "keep.txt": "keep",
+                    "Thumbs.db": "skip",
+                    "desktop.ini": "skip",
+                },
+            )
             config = Config(
                 backup_root=tmp,
                 exclude_dirs=[],
@@ -74,10 +83,13 @@ class TestScanner:
 
     def test_size_limit_skips_large_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {
-                "small.txt": "x",
-                "big.txt": "x" * 2000,
-            })
+            self._make_tree(
+                tmp,
+                {
+                    "small.txt": "x",
+                    "big.txt": "x" * 2000,
+                },
+            )
             config = Config(
                 backup_root=tmp,
                 exclude_dirs=[],
@@ -93,10 +105,13 @@ class TestScanner:
 
     def test_type_excluded_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {
-                "app.exe": "binary",
-                "doc.txt": "text",
-            })
+            self._make_tree(
+                tmp,
+                {
+                    "app.exe": "binary",
+                    "doc.txt": "text",
+                },
+            )
             config = Config(
                 backup_root=tmp,
                 exclude_dirs=[],
@@ -114,9 +129,12 @@ class TestScanner:
     def test_media_files_bypass_size_limit(self):
         with tempfile.TemporaryDirectory() as tmp:
             # Create a "large" jpg that exceeds the default limit
-            self._make_tree(tmp, {
-                "photo.jpg": "x" * 5000,
-            })
+            self._make_tree(
+                tmp,
+                {
+                    "photo.jpg": "x" * 5000,
+                },
+            )
             config = Config(
                 backup_root=tmp,
                 exclude_dirs=[],
@@ -144,3 +162,85 @@ class TestScanner:
             assert entry.size > 0
             assert entry.mtime > 0
             assert entry.path.endswith("Thumbs.db")
+
+    def test_path_pattern_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_tree(
+                tmp,
+                {
+                    "keep.txt": "keep",
+                    "lectures/open-law-notes/rec.wav": "skip",
+                },
+            )
+            config = Config(
+                backup_root=tmp,
+                exclude_dirs=[],
+                exclude_files=[],
+                exclude_path_patterns=["*/open-law-notes/*.wav"],
+            )
+            entries = list(scan(config))
+            skipped = [e for e in entries if e.is_skipped]
+            kept = [e for e in entries if not e.is_skipped]
+
+            assert len(kept) == 1
+            assert len(skipped) == 1
+            assert "excluded_by_path_pattern" in skipped[0].skip_reason
+
+    def test_specific_file_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_tree(
+                tmp,
+                {
+                    "keep.txt": "keep",
+                    "docs/secret.pdf": "skip",
+                },
+            )
+            config = Config(
+                backup_root=tmp,
+                exclude_dirs=[],
+                exclude_files=[],
+                exclude_specific_files=["docs/secret.pdf"],
+            )
+            entries = list(scan(config))
+            skipped = [e for e in entries if e.is_skipped]
+            kept = [e for e in entries if not e.is_skipped]
+
+            assert len(kept) == 1
+            assert len(skipped) == 1
+            assert "excluded_by_specific_file" in skipped[0].skip_reason
+
+    def test_nonexistent_backup_root_yields_nothing(self) -> None:
+        config = Config(
+            backup_root="/nonexistent/path/that/does/not/exist",
+            exclude_dirs=[],
+            exclude_files=[],
+        )
+        entries = list(scan(config))
+        assert len(entries) == 0
+
+    def test_file_entry_properties(self) -> None:
+        entry = FileEntry(
+            path="/test/photo.JPG",
+            relative_path="photo.JPG",
+            size=2048,
+            mtime=1000.0,
+        )
+        assert entry.extension == ".jpg"
+        assert "KB" in entry.size_human
+
+
+class TestTruncateRelativePath:
+    def test_short_path_unchanged(self) -> None:
+        assert _truncate_relative_path("short.txt", max_len=260) == "short.txt"
+
+    def test_long_path_truncated(self) -> None:
+        long_stem = "a" * 300
+        result = _truncate_relative_path(f"{long_stem}.txt", max_len=20)
+        assert len(result) <= 20
+        assert result.endswith(".txt")
+
+    def test_long_path_with_directory(self) -> None:
+        result = _truncate_relative_path(f"dir/{'a' * 300}.txt", max_len=20)
+        assert len(result) <= 20
+        assert result.startswith("dir/")
+        assert result.endswith(".txt")
