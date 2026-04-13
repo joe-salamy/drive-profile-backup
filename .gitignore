@@ -1,0 +1,32 @@
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Google OAuth credentials (NEVER commit these)
+credentials.json
+token.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Backup tool state
+manifest.json
+
+# Claude
+scratchpad.md
+
+# Credentials 
+credentials.json
