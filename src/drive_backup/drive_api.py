@@ -5,14 +5,16 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from googleapiclient.errors import HttpError
+from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
+from googleapiclient.discovery import build  # type: ignore[import-untyped]
+from googleapiclient.http import MediaFileUpload  # type: ignore[import-untyped]
+from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ class DriveAPI:
         self._token_path = token_path
         self._max_retries = max_retries
         self._rate_limiter = RateLimiter(writes_per_second)
-        self._service = None
+        self._service: Any = None
         # Cache: (folder_name, parent_id) -> folder_id
         self._folder_cache: dict[tuple[str, str | None], str] = {}
 
@@ -61,7 +63,7 @@ class DriveAPI:
         token_path = os.path.expanduser(self._token_path)
 
         if os.path.exists(token_path):
-            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+            creds = Credentials.from_authorized_user_file(token_path, SCOPES)  # type: ignore[no-untyped-call]
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
@@ -86,14 +88,12 @@ class DriveAPI:
         logger.info("Authenticated to Google Drive")
 
     @property
-    def service(self):
+    def service(self) -> Any:
         if self._service is None:
             raise RuntimeError("Call authenticate() first")
         return self._service
 
-    def get_or_create_folder(
-        self, name: str, parent_id: str | None = None
-    ) -> str:
+    def get_or_create_folder(self, name: str, parent_id: str | None = None) -> str:
         """Find an existing folder by name+parent, or create it. Returns folder ID."""
         cache_key = (name, parent_id)
         if cache_key in self._folder_cache:
@@ -112,27 +112,21 @@ class DriveAPI:
         files = results.get("files", [])
 
         if files:
-            folder_id = files[0]["id"]
+            folder_id: str = files[0]["id"]
             logger.debug("Found existing folder '%s': %s", name, folder_id)
         else:
             self._rate_limiter.wait()
-            metadata = {"name": name, "mimeType": FOLDER_MIME}
+            metadata: dict[str, Any] = {"name": name, "mimeType": FOLDER_MIME}
             if parent_id:
                 metadata["parents"] = [parent_id]
-            folder = (
-                self.service.files()
-                .create(body=metadata, fields="id")
-                .execute()
-            )
-            folder_id = folder["id"]
+            folder = self.service.files().create(body=metadata, fields="id").execute()
+            folder_id = str(folder["id"])
             logger.debug("Created folder '%s': %s", name, folder_id)
 
         self._folder_cache[cache_key] = folder_id
         return folder_id
 
-    def ensure_folder_path(
-        self, path_parts: list[str], root_id: str
-    ) -> str:
+    def ensure_folder_path(self, path_parts: list[str], root_id: str) -> str:
         """Recursively create the folder hierarchy, returning the leaf folder ID."""
         current_id = root_id
         for part in path_parts:
@@ -144,10 +138,10 @@ class DriveAPI:
         local_path: str,
         parent_id: str,
         resumable: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Upload a new file to Drive. Returns file metadata including md5Checksum."""
         filename = Path(local_path).name
-        metadata = {"name": filename, "parents": [parent_id]}
+        metadata: dict[str, Any] = {"name": filename, "parents": [parent_id]}
 
         media = MediaFileUpload(
             local_path,
@@ -163,7 +157,7 @@ class DriveAPI:
         file_id: str,
         local_path: str,
         resumable: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Update an existing file on Drive. Returns updated metadata."""
         media = MediaFileUpload(
             local_path,
@@ -174,7 +168,9 @@ class DriveAPI:
             lambda: self._do_update(file_id, media, resumable)
         )
 
-    def _do_upload(self, metadata: dict, media, resumable: bool) -> dict:
+    def _do_upload(
+        self, metadata: dict[str, Any], media: Any, resumable: bool
+    ) -> dict[str, Any]:
         self._rate_limiter.wait()
         request = self.service.files().create(
             body=metadata,
@@ -183,9 +179,10 @@ class DriveAPI:
         )
         if resumable:
             return self._resumable_execute(request)
-        return request.execute()
+        result: dict[str, Any] = request.execute()
+        return result
 
-    def _do_update(self, file_id: str, media, resumable: bool) -> dict:
+    def _do_update(self, file_id: str, media: Any, resumable: bool) -> dict[str, Any]:
         self._rate_limiter.wait()
         request = self.service.files().update(
             fileId=file_id,
@@ -194,28 +191,32 @@ class DriveAPI:
         )
         if resumable:
             return self._resumable_execute(request)
-        return request.execute()
+        result: dict[str, Any] = request.execute()
+        return result
 
-    def _resumable_execute(self, request) -> dict:
+    def _resumable_execute(self, request: Any) -> dict[str, Any]:
         """Execute a resumable upload with progress tracking."""
-        response = None
+        response: dict[str, Any] | None = None
         while response is None:
             status, response = request.next_chunk()
             if status:
                 logger.debug("Upload progress: %.0f%%", status.progress() * 100)
         return response
 
-    def _execute_with_retry(self, fn) -> dict:
+    def _execute_with_retry(self, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         """Execute a function with exponential backoff on retryable errors."""
         for attempt in range(self._max_retries):
             try:
                 return fn()
             except HttpError as e:
                 if e.resp.status in (429, 500, 503) and attempt < self._max_retries - 1:
-                    wait = (2 ** attempt) + (time.monotonic() % 1)  # backoff + jitter
+                    wait = (2**attempt) + (time.monotonic() % 1)  # backoff + jitter
                     logger.warning(
                         "Retryable error %d, waiting %.1fs (attempt %d/%d)",
-                        e.resp.status, wait, attempt + 1, self._max_retries,
+                        e.resp.status,
+                        wait,
+                        attempt + 1,
+                        self._max_retries,
                     )
                     time.sleep(wait)
                 else:

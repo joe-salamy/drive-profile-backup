@@ -77,7 +77,7 @@ def _human_size(num_bytes: int) -> str:
     return f"{num_bytes:.1f} PB"
 
 
-def generate_report(stats: BackupStats) -> dict:
+def generate_report(stats: BackupStats) -> dict[str, object]:
     """Build the full JSON report structure from backup stats."""
     return {
         "backup_timestamp": datetime.now(timezone.utc).isoformat(),
@@ -90,9 +90,7 @@ def generate_report(stats: BackupStats) -> dict:
         "files_skipped_dedup": stats.files_skipped_dedup,
         "files_skipped_exclusion": stats.files_skipped_exclusion,
         "files_skipped_error": stats.files_skipped_error,
-        "total_files_eligible": (
-            stats.files_uploaded + stats.files_skipped_dedup
-        ),
+        "total_files_eligible": (stats.files_uploaded + stats.files_skipped_dedup),
         "total_bytes_uploaded": stats.bytes_uploaded,
         "total_size_uploaded_human": _human_size(stats.bytes_uploaded),
         "total_bytes_eligible": stats.bytes_total_eligible,
@@ -123,7 +121,7 @@ def generate_report(stats: BackupStats) -> dict:
     }
 
 
-def save_report(report: dict, path: str) -> None:
+def save_report(report: dict[str, object], path: str) -> None:
     """Write report dict to a JSON file."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)

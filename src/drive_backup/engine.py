@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
-from pathlib import Path
+from typing import Any
 
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, compute_md5, needs_upload
@@ -26,7 +27,9 @@ logger = logging.getLogger(__name__)
 class BackupEngine:
     """Orchestrates the full backup flow."""
 
-    def __init__(self, config: Config, dry_run: bool = False, full: bool = False) -> None:
+    def __init__(
+        self, config: Config, dry_run: bool = False, full: bool = False
+    ) -> None:
         self.config = config
         self.dry_run = dry_run
         self.full = full  # Ignore manifest, re-upload everything
@@ -38,7 +41,10 @@ class BackupEngine:
         self.drive: DriveAPI | None = None
         self._root_folder_id: str = ""
 
-    def run(self, progress_callback=None) -> dict:
+    def run(
+        self,
+        progress_callback: Callable[[FileEntry, str], None] | None = None,
+    ) -> dict[str, Any]:
         """Execute the full backup and return the report dict.
 
         Args:
@@ -109,7 +115,11 @@ class BackupEngine:
 
         return report
 
-    def _process_file(self, file: FileEntry, progress_callback=None) -> None:
+    def _process_file(
+        self,
+        file: FileEntry,
+        progress_callback: Callable[[FileEntry, str], None] | None = None,
+    ) -> None:
         """Process a single file: check exclusions, dedup, upload."""
         # Skipped by scanner (exclusion or error)
         if file.is_skipped:
@@ -185,9 +195,7 @@ class BackupEngine:
         rel_dir = os.path.dirname(file.relative_path)
         if rel_dir:
             path_parts = rel_dir.split("/")
-            parent_id = self.drive.ensure_folder_path(
-                path_parts, self._root_folder_id
-            )
+            parent_id = self.drive.ensure_folder_path(path_parts, self._root_folder_id)
         else:
             parent_id = self._root_folder_id
 
@@ -200,9 +208,7 @@ class BackupEngine:
                 existing.drive_file_id, file.path, resumable=resumable
             )
         else:
-            result = self.drive.upload_file(
-                file.path, parent_id, resumable=resumable
-            )
+            result = self.drive.upload_file(file.path, parent_id, resumable=resumable)
 
         # Update manifest with Drive's response
         md5 = result.get("md5Checksum", "")

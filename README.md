@@ -6,7 +6,7 @@ Incrementally back up your Windows user profile to Google Drive. First run uploa
 
 - **Incremental backups** — two-tier dedup (mtime+size fast path, then MD5) skips unchanged files
 - **Smart exclusions** — skips AppData, venv, .git, node_modules, caches, and configurable size limits per file type
-- **Rich metadata reports** — JSON reports withd full stats, skipped file details, and error logs uploaded to Drive
+- **Rich metadata reports** — JSON reports with full stats, skipped file details, and error logs uploaded to Drive
 - **Dry-run mode** — scan and report without uploading anything
 - **Progress bar** — live upload progress via `rich`
 - **Resumable uploads** — large files use resumable uploads with retry logic
@@ -36,6 +36,21 @@ Edit `config.yaml` to set your backup root, exclusions, and size limits.
 
 ## Usage
 
+### Backup (`drive-backup`)
+
+```bash
+drive-backup [--dry-run] [--full] [--config PATH] [--verbose]
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `--dry-run` | Scan and report only — no files are uploaded. Shows what *would* be uploaded and saves a JSON report to `~/.drive-backup/reports/`. |
+| `--full` | Ignore the local manifest and re-upload every eligible file, even if it hasn't changed since the last run. |
+| `--config PATH` | Path to `config.yaml`. Defaults to `./config.yaml` in the current directory. |
+| `--verbose` | Print each file as it is processed, including skip reasons and upload actions. Also sets log level to DEBUG. |
+
+Examples:
+
 ```bash
 # First run: authenticate and see what would be uploaded
 drive-backup --dry-run
@@ -45,10 +60,24 @@ drive-backup
 
 # Re-upload everything (ignore manifest)
 drive-backup --full
+```
 
-# Use a custom config
-drive-backup --config my-config.yaml
+### Summary report (`scripts/generate_summary.py`)
 
-# Verbose output (print each file)
-drive-backup --verbose
+Scans the profile and writes a markdown summary to `docs/profile-summary-YYYY-MM-DD.md` with breakdowns by root folder, file type, top 25 largest files, skipped file reasons, and errors.
+
+```bash
+python scripts/generate_summary.py [--config PATH] [--out DIR]
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `--config PATH` | Path to `config.yaml`. Defaults to `./config.yaml`. |
+| `--out DIR` | Output directory for the markdown file. Defaults to `docs/`. |
+
+Example:
+
+```bash
+python scripts/generate_summary.py
+# writes docs/profile-summary-2026-04-13.md
 ```

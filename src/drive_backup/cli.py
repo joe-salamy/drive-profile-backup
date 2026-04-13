@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 import sys
+from typing import Any
 
 from rich.console import Console
 from rich.progress import (
@@ -70,8 +71,8 @@ def main(argv: list[str] | None = None) -> None:
     if sys.platform == "win32":
         os.environ.setdefault("PYTHONIOENCODING", "utf-8")
         try:
-            sys.stdout.reconfigure(encoding="utf-8")
-            sys.stderr.reconfigure(encoding="utf-8")
+            sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+            sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         except (AttributeError, OSError):
             pass
 
@@ -109,13 +110,9 @@ def main(argv: list[str] | None = None) -> None:
             uploaded_bytes += file.size
             if args.verbose:
                 tag = "UPLOAD" if action.startswith("uploaded:") else "WOULD UPLOAD"
-                console.print(
-                    f"  [{tag}] {file.relative_path} ({file.size_human})"
-                )
+                console.print(f"  [{tag}] {file.relative_path} ({file.size_human})")
         elif args.verbose and action == "skipped":
-            console.print(
-                f"  [SKIP] {file.relative_path} — {file.skip_reason}"
-            )
+            console.print(f"  [SKIP] {file.relative_path} — {file.skip_reason}")
 
     # Run backup
     with progress:
@@ -130,7 +127,7 @@ def main(argv: list[str] | None = None) -> None:
     _print_summary(console, report)
 
 
-def _print_summary(console: Console, report: dict) -> None:
+def _print_summary(console: Console, report: dict[str, Any]) -> None:
     """Print a formatted summary table."""
     table = Table(title="Backup Summary", show_header=False)
     table.add_column("Key", style="bold")
@@ -162,19 +159,14 @@ def _print_summary(console: Console, report: dict) -> None:
     # Show top skipped files by size if there are any
     skipped = report.get("skipped_files", [])
     if skipped:
-        console.print(
-            f"\n[dim]{len(skipped)} files skipped. "
-            f"Top 10 by size:[/]"
-        )
+        console.print(f"\n[dim]{len(skipped)} files skipped. " f"Top 10 by size:[/]")
         top_skipped = sorted(skipped, key=lambda f: f["size_bytes"], reverse=True)[:10]
         skip_table = Table(show_header=True, header_style="dim")
         skip_table.add_column("File", max_width=60)
         skip_table.add_column("Size", justify="right")
         skip_table.add_column("Reason")
         for sf in top_skipped:
-            skip_table.add_row(
-                sf["relative_path"], sf["size_human"], sf["reason"]
-            )
+            skip_table.add_row(sf["relative_path"], sf["size_human"], sf["reason"])
         console.print(skip_table)
 
     errors = report.get("error_files", [])
