@@ -5,18 +5,19 @@ from __future__ import annotations
 import tempfile
 import os
 
-from drive_backup.cli import _human_size, main
+from drive_backup.cli import main
+from drive_backup.utils import human_size
 
 
 class TestCliHumanSize:
     def test_bytes(self) -> None:
-        assert _human_size(100) == "100.0 B"
+        assert human_size(100) == "100.0 B"
 
     def test_kilobytes(self) -> None:
-        assert _human_size(2048) == "2.0 KB"
+        assert human_size(2048) == "2.0 KB"
 
     def test_megabytes(self) -> None:
-        assert _human_size(1024 * 1024) == "1.0 MB"
+        assert human_size(1024 * 1024) == "1.0 MB"
 
 
 class TestCliMain:

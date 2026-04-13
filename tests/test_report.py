@@ -10,30 +10,30 @@ from drive_backup.report import (
     BackupStats,
     ErrorFile,
     SkippedFile,
-    _human_size,
     generate_report,
     save_report,
 )
+from drive_backup.utils import human_size
 
 
 class TestHumanSize:
     def test_bytes(self) -> None:
-        assert _human_size(500) == "500.0 B"
+        assert human_size(500) == "500.0 B"
 
     def test_kilobytes(self) -> None:
-        assert _human_size(2048) == "2.0 KB"
+        assert human_size(2048) == "2.0 KB"
 
     def test_megabytes(self) -> None:
-        assert _human_size(5 * 1024 * 1024) == "5.0 MB"
+        assert human_size(5 * 1024 * 1024) == "5.0 MB"
 
     def test_gigabytes(self) -> None:
-        assert _human_size(3 * 1024**3) == "3.0 GB"
+        assert human_size(3 * 1024**3) == "3.0 GB"
 
     def test_zero(self) -> None:
-        assert _human_size(0) == "0.0 B"
+        assert human_size(0) == "0.0 B"
 
     def test_very_large(self) -> None:
-        result = _human_size(5 * 1024**5)
+        result = human_size(5 * 1024**5)
         assert "PB" in result
 
 

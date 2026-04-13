@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
-from googleapiclient.discovery import build  # type: ignore[import-untyped]
-from googleapiclient.http import MediaFileUpload  # type: ignore[import-untyped]
-from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +53,11 @@ class DriveAPI:
 
     def authenticate(self) -> None:
         """Run OAuth2 flow and build the Drive service."""
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
+        from googleapiclient.discovery import build  # type: ignore[import-untyped]
+
         creds = None
         token_path = os.path.expanduser(self._token_path)
 
@@ -99,8 +98,9 @@ class DriveAPI:
         if cache_key in self._folder_cache:
             return self._folder_cache[cache_key]
 
-        # Search for existing folder
-        query = f"name='{name}' and mimeType='{FOLDER_MIME}' and trashed=false"
+        # Search for existing folder (escape single quotes to prevent query injection)
+        safe_name = name.replace("\\", "\\\\").replace("'", "\\'")
+        query = f"name='{safe_name}' and mimeType='{FOLDER_MIME}' and trashed=false"
         if parent_id:
             query += f" and '{parent_id}' in parents"
 
@@ -140,6 +140,8 @@ class DriveAPI:
         resumable: bool = False,
     ) -> dict[str, Any]:
         """Upload a new file to Drive. Returns file metadata including md5Checksum."""
+        from googleapiclient.http import MediaFileUpload  # type: ignore[import-untyped]
+
         filename = Path(local_path).name
         metadata: dict[str, Any] = {"name": filename, "parents": [parent_id]}
 
@@ -159,6 +161,8 @@ class DriveAPI:
         resumable: bool = False,
     ) -> dict[str, Any]:
         """Update an existing file on Drive. Returns updated metadata."""
+        from googleapiclient.http import MediaFileUpload  # type: ignore[import-untyped]
+
         media = MediaFileUpload(
             local_path,
             resumable=resumable,
@@ -205,12 +209,14 @@ class DriveAPI:
 
     def _execute_with_retry(self, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         """Execute a function with exponential backoff on retryable errors."""
+        from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
+
         for attempt in range(self._max_retries):
             try:
                 return fn()
             except HttpError as e:
                 if e.resp.status in (429, 500, 503) and attempt < self._max_retries - 1:
-                    wait = (2**attempt) + (time.monotonic() % 1)  # backoff + jitter
+                    wait = (2**attempt) + random.random()  # backoff + jitter
                     logger.warning(
                         "Retryable error %d, waiting %.1fs (attempt %d/%d)",
                         e.resp.status,

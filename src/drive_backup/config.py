@@ -94,7 +94,8 @@ class Config:
 
         # Normalize extensions to lowercase with leading dot
         self.no_size_limit = [
-            ext if ext.startswith(".") else f".{ext}" for ext in self.no_size_limit
+            (ext if ext.startswith(".") else f".{ext}").lower()
+            for ext in self.no_size_limit
         ]
         self.size_limits_by_type = {
             (ext if ext.startswith(".") else f".{ext}"): limit

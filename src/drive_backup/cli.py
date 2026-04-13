@@ -6,30 +6,12 @@ import argparse
 import logging
 import os
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    TextColumn,
-    TimeElapsedColumn,
-    TransferSpeedColumn,
-)
-from rich.table import Table
+if TYPE_CHECKING:
+    from rich.console import Console
 
-from drive_backup.config import load_config
-from drive_backup.engine import BackupEngine
-from drive_backup.scanner import FileEntry
-
-
-def _human_size(num_bytes: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(num_bytes) < 1024:
-            return f"{num_bytes:.1f} {unit}"
-        num_bytes /= 1024  # type: ignore[assignment]
-    return f"{num_bytes:.1f} PB"
+    from drive_backup.scanner import FileEntry
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -69,14 +51,27 @@ def main(argv: list[str] | None = None) -> None:
 
     # Force UTF-8 output on Windows to avoid encoding errors with Rich
     if sys.platform == "win32":
-        os.environ.setdefault("PYTHONIOENCODING", "utf-8")
         try:
             sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
             sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
         except (AttributeError, OSError):
             pass
 
-    console = Console(force_terminal=True)
+    # Lazy imports — rich and engine are heavy; defer until after arg parsing
+    from rich.console import Console
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        TextColumn,
+        TimeElapsedColumn,
+        TransferSpeedColumn,
+    )
+
+    from drive_backup.config import load_config
+    from drive_backup.engine import BackupEngine
+
+    console = Console()
 
     # Load config
     config = load_config(args.config)
@@ -129,6 +124,8 @@ def main(argv: list[str] | None = None) -> None:
 
 def _print_summary(console: Console, report: dict[str, Any]) -> None:
     """Print a formatted summary table."""
+    from rich.table import Table
+
     table = Table(title="Backup Summary", show_header=False)
     table.add_column("Key", style="bold")
     table.add_column("Value")
