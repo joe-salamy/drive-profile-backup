@@ -1,0 +1,97 @@
+# drive-profile-backup configuration
+# See README.md for setup instructions
+
+# Root directory to back up (default: your home directory)
+backup_root: "C:\\Users\\joesa"
+
+# Directory names to exclude (matched anywhere in the tree)
+exclude_dirs:
+  - "venv"
+  - ".venv"
+  - "env"
+  - ".git"
+  - "__pycache__"
+  - "node_modules"
+  - "AppData"          # Caches, temp files, app internals — usually 50+ GB
+  - ".local"           # Claude Code binaries (~719 MB, auto-downloaded)
+  - ".cache"           # Selenium browser binaries, pip caches — all re-downloadable
+  - ".vscode"          # VS Code extensions (~374 MB, 12k+ files) — re-installable
+  - "edge_selenium_profile"  # Browser cache + ML models from room-reserver
+  - ".azure-functions-core-tools"  # Dev tool cache (~180 MB, re-downloadable)
+  - ".copilot"         # GitHub Copilot cache (~115 MB, re-downloadable)
+  - ".docker"          # Docker Desktop cache (~72 MB, re-downloadable)
+  - ".tox"
+  - ".mypy_cache"
+  - ".pytest_cache"
+  - ".ruff_cache"
+  - ".claude"
+  - "scoop"
+
+# File name patterns to exclude (supports wildcards)
+exclude_files:
+  - "NTUSER.DAT*"
+  - "ntuser.*"
+  - "Thumbs.db"
+  - "desktop.ini"
+  - "*.tmp"
+  - "*.lnk"
+
+# Path patterns to exclude (matched against relative path using wildcards)
+exclude_path_patterns:
+  - "*/open-law-notes/*.wav"  # Duplicate .wav copies of .m4a lecture recordings
+
+# Skip symlinks and NTFS junction points (prevents infinite loops)
+exclude_symlinks: true
+
+# Default max file size in MB (files larger than this are skipped)
+max_file_size_mb: 500
+
+# Per-extension size limits in MB (overrides max_file_size_mb)
+# Set to 0 to skip that file type entirely
+size_limits_by_type:
+  ".iso": 0            # Disk images — skip entirely
+  ".exe": 0            # Executables — easily re-downloaded
+  ".msi": 0            # Installers — easily re-downloaded
+  ".dll": 0            # Shared libraries — bundled with apps, re-downloadable
+  ".ort": 0            # ONNX Runtime models — large ML artifacts, re-downloadable
+
+# Extensions that are NEVER size-limited (personal media to preserve)
+no_size_limit:
+  - ".jpg"
+  - ".jpeg"
+  - ".png"
+  - ".gif"
+  - ".bmp"
+  - ".heic"
+  - ".webp"
+  - ".mp4"
+  - ".mov"
+  - ".avi"
+  - ".mkv"
+  - ".wmv"
+  - ".mp3"
+  - ".wav"
+  - ".flac"
+  - ".aac"
+  - ".ogg"
+
+# Google Drive settings
+drive_folder_name: "Profile Backup - joesa"
+
+# Where to store the local manifest (tracks what's been uploaded)
+manifest_path: "~/.drive-backup/manifest.json"
+
+# Path to OAuth credentials from Google Cloud Console
+credentials_path: "credentials.json"
+
+# Where to cache the OAuth token (auto-refreshes)
+token_path: "~/.drive-backup/token.json"
+
+# Use resumable uploads for files larger than this (in MB)
+resumable_threshold_mb: 5
+
+# Max retry attempts for failed uploads
+max_retries: 3
+
+# Upload rate limit (Drive hard cap is 3/sec — stay under it)
+writes_per_second: 2.5
