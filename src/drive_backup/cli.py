@@ -25,11 +25,6 @@ def main(argv: list[str] | None = None) -> None:
         help="Scan and report only, no uploads",
     )
     parser.add_argument(
-        "--config",
-        default="config.yaml",
-        help="Path to config.yaml (default: ./config.yaml)",
-    )
-    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Print each file as it is processed",
@@ -74,7 +69,7 @@ def main(argv: list[str] | None = None) -> None:
     console = Console()
 
     # Load config
-    config = load_config(args.config)
+    config = load_config("config.yaml")
     console.print(f"[bold]Backup root:[/] {config.backup_root}")
     if args.dry_run:
         console.print("[yellow]DRY RUN - no files will be uploaded[/]")

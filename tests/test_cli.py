@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-import tempfile
 import os
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pytest
 
 from drive_backup.cli import main
 from drive_backup.utils import human_size
@@ -21,36 +25,30 @@ class TestCliHumanSize:
 
 
 class TestCliMain:
-    def test_dry_run_completes(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            # Create a file to scan
-            with open(os.path.join(tmp, "test.txt"), "w") as f:
-                f.write("hello")
+    def test_dry_run_completes(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        (tmp_path / "test.txt").write_text("hello")
+        (tmp_path / "config.yaml").write_text(
+            f"backup_root: {tmp_path}\n"
+            "exclude_dirs: []\n"
+            "exclude_files: []\n"
+            f"manifest_path: {tmp_path / 'manifest.json'}\n"
+        )
 
-            # Create a config file
-            config_path = os.path.join(tmp, "config.yaml")
-            with open(config_path, "w") as f:
-                f.write(
-                    f"backup_root: {tmp}\n"
-                    "exclude_dirs: []\n"
-                    "exclude_files: []\n"
-                    f"manifest_path: {os.path.join(tmp, 'manifest.json')}\n"
-                )
+        monkeypatch.chdir(tmp_path)
+        main(["--dry-run"])
 
-            main(["--dry-run", "--config", config_path])
+    def test_verbose_dry_run(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        (tmp_path / "test.txt").write_text("hello")
+        (tmp_path / "config.yaml").write_text(
+            f"backup_root: {tmp_path}\n"
+            "exclude_dirs: []\n"
+            "exclude_files: []\n"
+            f"manifest_path: {tmp_path / 'manifest.json'}\n"
+        )
 
-    def test_verbose_dry_run(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with open(os.path.join(tmp, "test.txt"), "w") as f:
-                f.write("hello")
-
-            config_path = os.path.join(tmp, "config.yaml")
-            with open(config_path, "w") as f:
-                f.write(
-                    f"backup_root: {tmp}\n"
-                    "exclude_dirs: []\n"
-                    "exclude_files: []\n"
-                    f"manifest_path: {os.path.join(tmp, 'manifest.json')}\n"
-                )
-
-            main(["--dry-run", "--verbose", "--config", config_path])
+        monkeypatch.chdir(tmp_path)
+        main(["--dry-run", "--verbose"])

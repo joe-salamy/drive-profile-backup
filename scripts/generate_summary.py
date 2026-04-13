@@ -238,14 +238,11 @@ def main() -> None:
         description="Generate a profile backup summary markdown file"
     )
     parser.add_argument(
-        "--config", default="config.yaml", help="Path to config.yaml"
-    )
-    parser.add_argument(
         "--out", default="docs", help="Output directory (default: docs/)"
     )
     args = parser.parse_args()
 
-    out_path = generate_summary(args.config, args.out)
+    out_path = generate_summary("config.yaml", args.out)
     print(f"Summary written to {out_path}")
 
 
