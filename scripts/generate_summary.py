@@ -14,14 +14,7 @@ from pathlib import Path
 
 from drive_backup.config import load_config
 from drive_backup.scanner import FileEntry, scan
-
-
-def _human_size(num_bytes: float) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(num_bytes) < 1024:
-            return f"{num_bytes:.1f} {unit}"
-        num_bytes /= 1024
-    return f"{num_bytes:.1f} PB"
+from drive_backup.utils import human_size
 
 
 def _root_folder(rel_path: str) -> str:
@@ -55,8 +48,6 @@ def generate_summary(config_path: str, out_dir: str) -> str:
     eligible: list[FileEntry] = []
     skipped: list[FileEntry] = []
     errors: list[FileEntry] = []
-    excluded_dir_count = 0
-
     for entry in scan(config):
         if entry.is_skipped:
             if "error" in entry.skip_reason:
@@ -106,12 +97,12 @@ def generate_summary(config_path: str, out_dir: str) -> str:
     lines.append(f"**Date:** {today}  ")
     lines.append(f"**Backup root:** `{config.backup_root}`  ")
     lines.append(
-        f"**Total eligible for upload:** {_human_size(total_size)} "
+        f"**Total eligible for upload:** {human_size(total_size)} "
         f"across {len(eligible):,} files  "
     )
     lines.append(
         f"**Skipped by rules:** {len(skipped):,} files "
-        f"({_human_size(skipped_size)})  "
+        f"({human_size(skipped_size)})  "
     )
     lines.append(f"**Skipped by errors:** {len(errors)} files")
     lines.append("")
@@ -132,7 +123,7 @@ def generate_summary(config_path: str, out_dir: str) -> str:
         pct = (data["size"] / total_size * 100) if total_size else 0
         pct_str = f"{pct:.1f}%" if pct >= 0.1 else "<0.1%"
         lines.append(
-            f"| {folder} | {data['count']:,} | {_human_size(data['size'])} | {pct_str} |"
+            f"| {folder} | {data['count']:,} | {human_size(data['size'])} | {pct_str} |"
         )
 
     if other_folders:
@@ -142,7 +133,7 @@ def generate_summary(config_path: str, out_dir: str) -> str:
         pct_str = f"{pct:.1f}%" if pct >= 0.1 else "<0.1%"
         lines.append(
             f"| All other ({len(other_folders)} folders) | {other_count:,} "
-            f"| {_human_size(other_size)} | {pct_str} |"
+            f"| {human_size(other_size)} | {pct_str} |"
         )
 
     lines.append("")
@@ -163,7 +154,7 @@ def generate_summary(config_path: str, out_dir: str) -> str:
         pct = (data["size"] / total_size * 100) if total_size else 0
         pct_str = f"{pct:.1f}%" if pct >= 0.1 else "<0.1%"
         lines.append(
-            f"| {ext} | {data['count']:,} | {_human_size(data['size'])} | {pct_str} |"
+            f"| {ext} | {data['count']:,} | {human_size(data['size'])} | {pct_str} |"
         )
 
     if other_exts:
@@ -172,7 +163,7 @@ def generate_summary(config_path: str, out_dir: str) -> str:
         pct = (other_size / total_size * 100) if total_size else 0
         pct_str = f"~{pct:.1f}%" if pct >= 0.1 else "<0.1%"
         lines.append(
-            f"| All other | ~{other_count:,} | ~{_human_size(other_size)} | {pct_str} |"
+            f"| All other | ~{other_count:,} | ~{human_size(other_size)} | {pct_str} |"
         )
 
     lines.append("")
@@ -187,14 +178,14 @@ def generate_summary(config_path: str, out_dir: str) -> str:
 
     for i, f in enumerate(top25, 1):
         display = _shorten_path(f.relative_path)
-        lines.append(f"| {i} | {_human_size(f.size)} | {display} |")
+        lines.append(f"| {i} | {human_size(f.size)} | {display} |")
 
     lines.append("")
     lines.append("---")
     lines.append("")
 
     # --- Skipped files ---
-    lines.append(f"## Skipped Files ({len(skipped)} files, {_human_size(skipped_size)})")
+    lines.append(f"## Skipped Files ({len(skipped)} files, {human_size(skipped_size)})")
     lines.append("")
 
     if skip_reasons:
@@ -202,7 +193,7 @@ def generate_summary(config_path: str, out_dir: str) -> str:
         lines.append("| ------ | ----: | ---: |")
         for reason, data in sorted(skip_reasons.items(), key=lambda x: -x[1]["size"]):
             lines.append(
-                f"| {reason} | {data['count']:,} | {_human_size(data['size'])} |"
+                f"| {reason} | {data['count']:,} | {human_size(data['size'])} |"
             )
         lines.append("")
 
@@ -215,7 +206,7 @@ def generate_summary(config_path: str, out_dir: str) -> str:
         top_skipped = sorted(skipped, key=lambda f: -f.size)[:10]
         for f in top_skipped:
             display = _shorten_path(f.relative_path, 60)
-            lines.append(f"| {display} | {_human_size(f.size)} | {f.skip_reason} |")
+            lines.append(f"| {display} | {human_size(f.size)} | {f.skip_reason} |")
         lines.append("")
 
     lines.append("---")

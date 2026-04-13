@@ -46,7 +46,7 @@ class TestConfigDefaults:
     def test_extension_normalization(self):
         config = Config(no_size_limit=["jpg", ".PNG"])
         assert ".jpg" in config.no_size_limit
-        assert ".PNG" in config.no_size_limit
+        assert ".png" in config.no_size_limit
 
     def test_path_expansion(self):
         config = Config(manifest_path="~/test.json")

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterator
 
 from drive_backup.config import Config
+from drive_backup.utils import human_size
 
 _WIN32 = sys.platform == "win32"
 _MAX_PATH = 260
@@ -35,16 +36,7 @@ class FileEntry:
 
     @property
     def size_human(self) -> str:
-        return _human_size(self.size)
-
-
-def _human_size(num_bytes: int) -> str:
-    """Convert bytes to human-readable string."""
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(num_bytes) < 1024:
-            return f"{num_bytes:.1f} {unit}"
-        num_bytes /= 1024  # type: ignore[assignment]
-    return f"{num_bytes:.1f} PB"
+        return human_size(self.size)
 
 
 def _is_excluded_dir(name: str, exclude_dirs: list[str]) -> bool:
@@ -229,7 +221,7 @@ def scan(config: Config) -> Iterator[FileEntry]:
                         size=size,
                         mtime=mtime,
                         is_skipped=True,
-                        skip_reason=f"exceeds_size_limit ({_human_size(size)} > {limit_mb:.0f} MB)",
+                        skip_reason=f"exceeds_size_limit ({human_size(size)} > {limit_mb:.0f} MB)",
                     )
                     continue
 

@@ -9,7 +9,8 @@
       "Bash(venv/Scripts/python.exe -m pytest tests/ -q)",
       "Bash(venv/Scripts/python -m drive_backup.cli --dry-run --config config.yaml)",
       "Bash(venv/Scripts/python -c ':*)",
-      "Bash(venv/Scripts/python scripts/generate_summary.py --config config.yaml --out docs)"
+      "Bash(venv/Scripts/python scripts/generate_summary.py --config config.yaml --out docs)",
+      "Bash(grep -E \"\\\\.\\(py|json|yaml|yml|toml|cfg|ini|md|txt|sh\\)$|^d\")"
     ]
   },
   "hooks": {

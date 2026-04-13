@@ -9,9 +9,10 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, compute_md5, needs_upload
-from drive_backup.drive_api import DriveAPI
 from drive_backup.report import (
     BackupStats,
     ErrorFile,
@@ -20,6 +21,9 @@ from drive_backup.report import (
     save_report,
 )
 from drive_backup.scanner import FileEntry, scan
+
+if TYPE_CHECKING:
+    from drive_backup.drive_api import DriveAPI
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +42,7 @@ class BackupEngine:
             dry_run=dry_run,
         )
         self.manifest = Manifest()
-        self.drive: DriveAPI | None = None
+        self.drive: DriveAPI | None = None  # Lazy: imported only when needed
         self._root_folder_id: str = ""
 
     def run(
@@ -64,6 +68,8 @@ class BackupEngine:
 
         # Authenticate to Drive (unless dry-run)
         if not self.dry_run:
+            from drive_backup.drive_api import DriveAPI
+
             self.drive = DriveAPI(
                 credentials_path=self.config.credentials_path,
                 token_path=self.config.token_path,
@@ -203,7 +209,7 @@ class BackupEngine:
 
         # Update existing file or upload new one
         existing = self.manifest.get(file.relative_path)
-        if existing and reason == "content_changed":
+        if existing and existing.drive_file_id and reason in ("content_changed", "size_changed"):
             result = self.drive.update_file(
                 existing.drive_file_id, file.path, resumable=resumable
             )

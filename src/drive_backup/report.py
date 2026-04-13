@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from drive_backup.utils import human_size
+
 
 @dataclass
 class SkippedFile:
@@ -68,15 +70,6 @@ class BackupStats:
         return " ".join(parts)
 
 
-def _human_size(num_bytes: int) -> str:
-    """Convert bytes to human-readable string."""
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(num_bytes) < 1024:
-            return f"{num_bytes:.1f} {unit}"
-        num_bytes /= 1024  # type: ignore[assignment]
-    return f"{num_bytes:.1f} PB"
-
-
 def generate_report(stats: BackupStats) -> dict[str, object]:
     """Build the full JSON report structure from backup stats."""
     return {
@@ -92,9 +85,9 @@ def generate_report(stats: BackupStats) -> dict[str, object]:
         "files_skipped_error": stats.files_skipped_error,
         "total_files_eligible": (stats.files_uploaded + stats.files_skipped_dedup),
         "total_bytes_uploaded": stats.bytes_uploaded,
-        "total_size_uploaded_human": _human_size(stats.bytes_uploaded),
+        "total_size_uploaded_human": human_size(stats.bytes_uploaded),
         "total_bytes_eligible": stats.bytes_total_eligible,
-        "total_size_eligible_human": _human_size(stats.bytes_total_eligible),
+        "total_size_eligible_human": human_size(stats.bytes_total_eligible),
         "drive_folder_id": stats.drive_folder_id,
         "drive_folder_url": stats.drive_folder_url,
         "skipped_files": [
