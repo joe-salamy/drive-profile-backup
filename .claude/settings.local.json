@@ -10,7 +10,13 @@
       "Bash(venv/Scripts/python -m drive_backup.cli --dry-run --config config.yaml)",
       "Bash(venv/Scripts/python -c ':*)",
       "Bash(venv/Scripts/python scripts/generate_summary.py --config config.yaml --out docs)",
-      "Bash(grep -E \"\\\\.\\(py|json|yaml|yml|toml|cfg|ini|md|txt|sh\\)$|^d\")"
+      "Bash(grep -E \"\\\\.\\(py|json|yaml|yml|toml|cfg|ini|md|txt|sh\\)$|^d\")",
+      "Bash(venv/Scripts/python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(tasklist)",
+      "Bash(findstr /i python)"
     ]
   },
   "hooks": {

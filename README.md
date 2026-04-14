@@ -11,6 +11,10 @@ Incrementally back up your Windows user profile to Google Drive. First run uploa
 - **Progress bar** — live upload progress via `rich`
 - **Resumable uploads** — large files use resumable uploads with retry logic
 
+## Where files go
+
+Files are uploaded to a top-level Google Drive folder named by `drive_folder_name` in `config.yaml` (default: `Profile Backup`). The local directory structure is mirrored inside that folder, and JSON backup reports are saved to a `_reports` subfolder within it.
+
 ## Setup
 
 ### 1. Google Cloud Project
@@ -69,11 +73,11 @@ Scans the profile and writes a markdown summary to `docs/profile-summary-YYYY-MM
 python scripts/generate_summary.py [--out DIR] [--full-profile] [--include-appdata]
 ```
 
-| Flag                | Description                                                                                                                                              |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--out DIR`         | Output directory for the markdown file. Defaults to `docs/`.                                                                                             |
+| Flag                | Description                                                                                                                                                |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--out DIR`         | Output directory for the markdown file. Defaults to `docs/`.                                                                                               |
 | `--full-profile`    | Also generate unrestricted full-profile scan reports showing everything in the user profile, with a comparison table showing what the backup is excluding. |
-| `--include-appdata` | Include AppData in the full-profile scan. Opt-in because AppData can take 5-10+ minutes to scan.                                                         |
+| `--include-appdata` | Include AppData in the full-profile scan. Opt-in because AppData can take 5-10+ minutes to scan.                                                           |
 
 Examples:
 
@@ -89,5 +93,6 @@ python scripts/generate_summary.py --full-profile --include-appdata
 ```
 
 The `--full-profile` flag produces additional reports:
+
 - `profile-full-no-appdata-YYYY-MM-DD.md` — full profile scan excluding AppData
 - `profile-full-YYYY-MM-DD.md` — full profile scan including AppData (only with `--include-appdata`)
