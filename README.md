@@ -42,11 +42,11 @@ Edit `config.yaml` to set your backup root, exclusions, and size limits.
 drive-backup [--dry-run] [--full] [--verbose]
 ```
 
-| Flag            | Description                                                                                                                         |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `--dry-run`     | Scan and report only — no files are uploaded. Shows what _would_ be uploaded and saves a JSON report to `~/.drive-backup/reports/`. |
-| `--full`        | Ignore the local manifest and re-upload every eligible file, even if it hasn't changed since the last run.                          |
-| `--verbose`     | Print each file as it is processed, including skip reasons and upload actions. Also sets log level to DEBUG.                        |
+| Flag        | Description                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `--dry-run` | Scan and report only — no files are uploaded. Shows what _would_ be uploaded and saves a JSON report to `~/.drive-backup/reports/`. |
+| `--full`    | Ignore the local manifest and re-upload every eligible file, even if it hasn't changed since the last run.                          |
+| `--verbose` | Print each file as it is processed, including skip reasons and upload actions. Also sets log level to DEBUG.                        |
 
 Examples:
 
@@ -66,16 +66,28 @@ drive-backup --full
 Scans the profile and writes a markdown summary to `docs/profile-summary-YYYY-MM-DD.md` with breakdowns by root folder, file type, top 25 largest files, skipped file reasons, and errors.
 
 ```bash
-python scripts/generate_summary.py [--out DIR]
+python scripts/generate_summary.py [--out DIR] [--full-profile] [--include-appdata]
 ```
 
-| Flag            | Description                                                  |
-| --------------- | ------------------------------------------------------------ |
-| `--out DIR`     | Output directory for the markdown file. Defaults to `docs/`. |
+| Flag                | Description                                                                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--out DIR`         | Output directory for the markdown file. Defaults to `docs/`.                                                                                             |
+| `--full-profile`    | Also generate unrestricted full-profile scan reports showing everything in the user profile, with a comparison table showing what the backup is excluding. |
+| `--include-appdata` | Include AppData in the full-profile scan. Opt-in because AppData can take 5-10+ minutes to scan.                                                         |
 
-Example:
+Examples:
 
 ```bash
+# Backup-filtered summary only
 python scripts/generate_summary.py
-# writes docs/profile-summary-2026-04-13.md
+
+# Backup summary + full profile (without AppData)
+python scripts/generate_summary.py --full-profile
+
+# Backup summary + full profile with and without AppData
+python scripts/generate_summary.py --full-profile --include-appdata
 ```
+
+The `--full-profile` flag produces additional reports:
+- `profile-full-no-appdata-YYYY-MM-DD.md` — full profile scan excluding AppData
+- `profile-full-YYYY-MM-DD.md` — full profile scan including AppData (only with `--include-appdata`)
