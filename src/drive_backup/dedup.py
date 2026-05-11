@@ -141,7 +141,7 @@ def needs_upload(file: FileEntry, manifest: Manifest) -> tuple[bool, str]:
     # mtime changed but size same — check MD5 to confirm
     local_md5 = compute_md5(file.path)
     if local_md5 is None:
-        return False, "md5_error"
+        return True, "md5_error"
 
     if local_md5 == entry.md5:
         return False, "skipped_md5_match"

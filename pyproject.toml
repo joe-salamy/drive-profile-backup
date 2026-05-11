@@ -7,6 +7,7 @@ name = "drive-profile-backup"
 version = "0.1.0"
 description = "Incrementally back up your Windows user profile to Google Drive"
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = [
     "google-api-python-client>=2.100",
     "google-auth-oauthlib>=1.0",
@@ -17,7 +18,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "black>=24.0",
+    "mypy>=1.8",
     "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.4",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]

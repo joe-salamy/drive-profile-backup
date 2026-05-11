@@ -7,9 +7,7 @@ import os
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, compute_md5, needs_upload
@@ -17,6 +15,7 @@ from drive_backup.report import (
     BackupStats,
     ErrorFile,
     SkippedFile,
+    UploadFile,
     generate_report,
     save_report,
 )
@@ -113,11 +112,14 @@ class BackupEngine:
 
         # Upload report to Drive
         if not self.dry_run and self.drive:
-            reports_folder_id = self.drive.get_or_create_folder(
-                "_reports", self._root_folder_id
-            )
-            self.drive.upload_file(report_path, reports_folder_id)
-            logger.info("Report uploaded to Drive/_reports/")
+            try:
+                reports_folder_id = self.drive.get_or_create_folder(
+                    "_reports", self._root_folder_id
+                )
+                self.drive.upload_file(report_path, reports_folder_id)
+                logger.info("Report uploaded to Drive/_reports/")
+            except Exception as e:
+                logger.warning("Report upload failed: %s", e)
 
         return report
 
@@ -170,6 +172,7 @@ class BackupEngine:
         if self.dry_run:
             self.stats.files_uploaded += 1
             self.stats.bytes_uploaded += file.size
+            self._record_upload(file)
             if progress_callback:
                 progress_callback(file, f"would_upload:{reason}")
             return
@@ -178,6 +181,7 @@ class BackupEngine:
             self._upload_file(file, reason)
             self.stats.files_uploaded += 1
             self.stats.bytes_uploaded += file.size
+            self._record_upload(file)
             if progress_callback:
                 progress_callback(file, f"uploaded:{reason}")
         except Exception as e:
@@ -192,6 +196,17 @@ class BackupEngine:
             )
             if progress_callback:
                 progress_callback(file, "error")
+
+    def _record_upload(self, file: FileEntry) -> None:
+        """Track an uploaded (or would-be-uploaded) file for reporting."""
+        self.stats.uploaded_files.append(
+            UploadFile(
+                relative_path=file.relative_path,
+                size_bytes=file.size,
+                size_human=file.size_human,
+                extension=file.extension or "(no extension)",
+            )
+        )
 
     def _upload_file(self, file: FileEntry, reason: str) -> None:
         """Upload a single file to Drive and update the manifest."""
@@ -209,7 +224,16 @@ class BackupEngine:
 
         # Update existing file or upload new one
         existing = self.manifest.get(file.relative_path)
-        if existing and existing.drive_file_id and reason in ("content_changed", "size_changed"):
+        if (
+            existing
+            and existing.drive_file_id
+            and reason
+            in (
+                "content_changed",
+                "size_changed",
+                "md5_error",
+            )
+        ):
             result = self.drive.update_file(
                 existing.drive_file_id, file.path, resumable=resumable
             )

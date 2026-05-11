@@ -127,12 +127,10 @@ def scan(config: Config) -> Iterator[FileEntry]:
                 # Can happen with paths on different drives
                 rel_path = full_path.replace("\\", "/")
 
-            # On Windows, paths >= 260 chars need the \\?\ prefix for I/O
+            # On Windows, paths >= 260 chars need the \\?\ prefix for I/O.
+            # Keep relative_path intact: it is the Drive path and manifest key.
             if _WIN32 and len(full_path) >= _MAX_PATH:
                 full_path = "\\\\?\\" + full_path
-                # Truncate the filename in the relative path so Drive
-                # receives a name within the 260-char limit.
-                rel_path = _truncate_relative_path(rel_path)
 
             # Try to stat the file
             try:

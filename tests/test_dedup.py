@@ -2,13 +2,14 @@
 
 import os
 import tempfile
+from typing import Any
 
 from drive_backup.dedup import Manifest, compute_md5, needs_upload
 from drive_backup.scanner import FileEntry
 
 
 class TestComputeMD5:
-    def test_computes_correct_md5(self):
+    def test_computes_correct_md5(self) -> None:
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as f:
             f.write("hello world")
             f.flush()
@@ -17,17 +18,17 @@ class TestComputeMD5:
         # MD5 of "hello world"
         assert md5 == "5eb63bbbe01eeed093cb22bb8f5acdc3"
 
-    def test_returns_none_for_missing_file(self):
+    def test_returns_none_for_missing_file(self) -> None:
         result = compute_md5("/nonexistent/file.txt")
         assert result is None
 
 
 class TestManifest:
-    def test_load_empty(self):
+    def test_load_empty(self) -> None:
         manifest = Manifest.load("/nonexistent/manifest.json")
         assert len(manifest.entries) == 0
 
-    def test_save_and_load_roundtrip(self):
+    def test_save_and_load_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "manifest.json")
             manifest = Manifest()
@@ -49,7 +50,7 @@ class TestManifest:
             assert entry.size == 100
             assert entry.drive_file_id == "drive_123"
 
-    def test_save_creates_directories(self):
+    def test_save_creates_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "nested", "dir", "manifest.json")
             manifest = Manifest()
@@ -58,8 +59,8 @@ class TestManifest:
 
 
 class TestNeedsUpload:
-    def _make_file_entry(self, **kwargs) -> FileEntry:
-        defaults = {
+    def _make_file_entry(self, **kwargs: Any) -> FileEntry:
+        defaults: dict[str, Any] = {
             "path": "/test/file.txt",
             "relative_path": "file.txt",
             "size": 100,
@@ -68,14 +69,14 @@ class TestNeedsUpload:
         defaults.update(kwargs)
         return FileEntry(**defaults)
 
-    def test_new_file_needs_upload(self):
+    def test_new_file_needs_upload(self) -> None:
         manifest = Manifest()
         file = self._make_file_entry()
         result, reason = needs_upload(file, manifest)
         assert result is True
         assert reason == "new"
 
-    def test_unchanged_file_skipped(self):
+    def test_unchanged_file_skipped(self) -> None:
         manifest = Manifest()
         manifest.set(
             relative_path="file.txt",
@@ -90,7 +91,7 @@ class TestNeedsUpload:
         assert result is False
         assert reason == "skipped_mtime_match"
 
-    def test_size_changed_needs_upload(self):
+    def test_size_changed_needs_upload(self) -> None:
         manifest = Manifest()
         manifest.set(
             relative_path="file.txt",
@@ -156,8 +157,8 @@ class TestNeedsUpload:
         assert result is True
         assert reason == "content_changed"
 
-    def test_md5_error_skips(self) -> None:
-        """When MD5 can't be computed, skip upload."""
+    def test_md5_error_needs_upload(self) -> None:
+        """When MD5 can't be computed, attempt upload instead of silently skipping."""
         manifest = Manifest()
         manifest.set(
             relative_path="file.txt",
@@ -173,7 +174,7 @@ class TestNeedsUpload:
             mtime=1000.0,
         )
         result, reason = needs_upload(file, manifest)
-        assert result is False
+        assert result is True
         assert reason == "md5_error"
 
 

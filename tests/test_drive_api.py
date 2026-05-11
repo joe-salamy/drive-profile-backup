@@ -27,6 +27,10 @@ class TestRateLimiter:
         # Should wait ~0.01s (1/100)
         assert elapsed >= 0.005
 
+    def test_rejects_invalid_rate(self) -> None:
+        with pytest.raises(ValueError, match="writes_per_second"):
+            RateLimiter(writes_per_second=0)
+
 
 class TestDriveAPI:
     def test_service_raises_before_auth(self) -> None:
@@ -64,7 +68,7 @@ class TestDriveAPI:
             call_count += 1
             return f"folder_{call_count}"
 
-        api.get_or_create_folder = mock_get_or_create  # type: ignore[assignment]
+        api.get_or_create_folder = mock_get_or_create  # type: ignore[method-assign]
         result = api.ensure_folder_path(["a", "b", "c"], "root")
         assert result == "folder_3"
         assert call_count == 3

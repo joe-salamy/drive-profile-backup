@@ -2,9 +2,14 @@
 
 import os
 import tempfile
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from drive_backup.config import Config
 from drive_backup.scanner import FileEntry, _truncate_relative_path, scan
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestScanner:
@@ -17,7 +22,7 @@ class TestScanner:
             with open(full, mode) as f:
                 f.write(content)
 
-    def test_basic_scan_finds_files(self):
+    def test_basic_scan_finds_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(
                 tmp,
@@ -34,7 +39,7 @@ class TestScanner:
             assert "subdir/file2.txt" in paths
             assert all(not e.is_skipped for e in entries)
 
-    def test_excludes_directories(self):
+    def test_excludes_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(
                 tmp,
@@ -56,7 +61,7 @@ class TestScanner:
             assert "venv/lib/something.py" not in paths
             assert "__pycache__/cached.pyc" not in paths
 
-    def test_excludes_file_patterns(self):
+    def test_excludes_file_patterns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(
                 tmp,
@@ -81,7 +86,7 @@ class TestScanner:
             assert len(skipped) == 2
             assert all("excluded_by_pattern" in s.skip_reason for s in skipped)
 
-    def test_size_limit_skips_large_files(self):
+    def test_size_limit_skips_large_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(
                 tmp,
@@ -103,7 +108,7 @@ class TestScanner:
             assert len(skipped) == 1
             assert "exceeds_size_limit" in skipped[0].skip_reason
 
-    def test_type_excluded_files(self):
+    def test_type_excluded_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(
                 tmp,
@@ -126,7 +131,7 @@ class TestScanner:
             assert skipped[0].extension == ".exe"
             assert "type_excluded" in skipped[0].skip_reason
 
-    def test_media_files_bypass_size_limit(self):
+    def test_media_files_bypass_size_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             # Create a "large" jpg that exceeds the default limit
             self._make_tree(
@@ -146,7 +151,7 @@ class TestScanner:
             assert len(entries) == 1
             assert not entries[0].is_skipped
 
-    def test_skipped_files_have_metadata(self):
+    def test_skipped_files_have_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(tmp, {"Thumbs.db": "data"})
             config = Config(
@@ -227,6 +232,25 @@ class TestScanner:
         )
         assert entry.extension == ".jpg"
         assert "KB" in entry.size_human
+
+    def test_windows_long_path_keeps_manifest_identity(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        import drive_backup.scanner as scanner
+
+        long_name = f"{'a' * 40}.txt"
+        (tmp_path / long_name).write_text("content")
+        monkeypatch.setattr(scanner, "_WIN32", True)
+        monkeypatch.setattr(scanner, "_MAX_PATH", 10)
+
+        config = Config(
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+        )
+        entries = list(scan(config))
+
+        assert entries[0].relative_path == long_name
 
 
 class TestTruncateRelativePath:

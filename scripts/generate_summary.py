@@ -15,7 +15,6 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
-from pathlib import Path
 
 from drive_backup.config import load_config
 from drive_backup.scanner import FileEntry, scan
@@ -23,6 +22,7 @@ from drive_backup.utils import human_size
 
 _WIN32 = sys.platform == "win32"
 _MAX_PATH = 260
+CountSize = dict[str, int]
 
 
 def _root_folder(rel_path: str) -> str:
@@ -66,10 +66,10 @@ class ProfileStats:
     total_files: int = 0
     total_size: int = 0
     total_errors: int = 0
-    folder_stats: dict[str, dict] = field(
+    folder_stats: dict[str, CountSize] = field(
         default_factory=lambda: defaultdict(lambda: {"count": 0, "size": 0})
     )
-    ext_stats: dict[str, dict] = field(
+    ext_stats: dict[str, CountSize] = field(
         default_factory=lambda: defaultdict(lambda: {"count": 0, "size": 0})
     )
     top_files: list[tuple[int, str]] = field(default_factory=list)  # min-heap
@@ -193,9 +193,7 @@ def _render_full_profile_report(
     lines.append("| Folder | Files | Size | % of Total |")
     lines.append("| ------ | ----: | ---: | ---------: |")
 
-    folder_rows = sorted(
-        stats.folder_stats.items(), key=lambda x: -x[1]["size"]
-    )
+    folder_rows = sorted(stats.folder_stats.items(), key=lambda x: -x[1]["size"])
     for folder, data in folder_rows:
         pct = (data["size"] / stats.total_size * 100) if stats.total_size else 0
         pct_str = f"{pct:.1f}%" if pct >= 0.1 else "<0.1%"
@@ -275,8 +273,7 @@ def _render_full_profile_report(
         if stats.total_size > 0:
             backup_pct = backup_total_size / stats.total_size * 100
             lines.append(
-                f"| Coverage | 100% | {backup_pct:.1f}% | "
-                f"{100 - backup_pct:.1f}% |"
+                f"| Coverage | 100% | {backup_pct:.1f}% | " f"{100 - backup_pct:.1f}% |"
             )
         lines.append("")
         lines.append("---")
@@ -284,13 +281,9 @@ def _render_full_profile_report(
 
     # --- Errors ---
     if stats.total_errors > 0:
-        lines.append(
-            f"## Errors ({stats.total_errors:,} files could not be read)"
-        )
+        lines.append(f"## Errors ({stats.total_errors:,} files could not be read)")
         lines.append("")
-        lines.append(
-            "These files were inaccessible due to permission or OS errors."
-        )
+        lines.append("These files were inaccessible due to permission or OS errors.")
         lines.append("")
 
     return "\n".join(lines)
@@ -371,7 +364,7 @@ def generate_summary(config_path: str, out_dir: str) -> SummaryResult:
     skipped_size = sum(f.size for f in skipped)
 
     # --- Breakdown by root folder ---
-    folder_stats: dict[str, dict] = defaultdict(lambda: {"count": 0, "size": 0})
+    folder_stats: dict[str, CountSize] = defaultdict(lambda: {"count": 0, "size": 0})
     for f in eligible:
         folder = _root_folder(f.relative_path)
         folder_stats[folder]["count"] += 1
@@ -380,7 +373,7 @@ def generate_summary(config_path: str, out_dir: str) -> SummaryResult:
     folder_rows = sorted(folder_stats.items(), key=lambda x: -x[1]["size"])
 
     # --- Breakdown by extension ---
-    ext_stats: dict[str, dict] = defaultdict(lambda: {"count": 0, "size": 0})
+    ext_stats: dict[str, CountSize] = defaultdict(lambda: {"count": 0, "size": 0})
     for f in eligible:
         ext = f.extension or "(no ext)"
         ext_stats[ext]["count"] += 1
@@ -392,7 +385,7 @@ def generate_summary(config_path: str, out_dir: str) -> SummaryResult:
     top25 = sorted(eligible, key=lambda f: -f.size)[:25]
 
     # --- Skipped breakdown ---
-    skip_reasons: dict[str, dict] = defaultdict(lambda: {"count": 0, "size": 0})
+    skip_reasons: dict[str, CountSize] = defaultdict(lambda: {"count": 0, "size": 0})
     for f in skipped:
         reason = f.skip_reason.split(" ")[0]
         skip_reasons[reason]["count"] += 1

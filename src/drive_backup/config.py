@@ -86,6 +86,18 @@ class Config:
         if not self.backup_root:
             self.backup_root = str(Path.home())
 
+        if self.max_file_size_mb < 0:
+            raise ValueError("max_file_size_mb must be non-negative")
+        if self.resumable_threshold_mb < 0:
+            raise ValueError("resumable_threshold_mb must be non-negative")
+        if self.max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
+        if self.writes_per_second <= 0:
+            raise ValueError("writes_per_second must be greater than 0")
+        for extension, limit in self.size_limits_by_type.items():
+            if limit < 0:
+                raise ValueError(f"size limit for {extension!r} must be non-negative")
+
         # Expand ~ in paths
         self.backup_root = os.path.expanduser(self.backup_root)
         self.manifest_path = os.path.expanduser(self.manifest_path)
@@ -98,7 +110,7 @@ class Config:
             for ext in self.no_size_limit
         ]
         self.size_limits_by_type = {
-            (ext if ext.startswith(".") else f".{ext}"): limit
+            (ext if ext.startswith(".") else f".{ext}").lower(): limit
             for ext, limit in self.size_limits_by_type.items()
         }
 

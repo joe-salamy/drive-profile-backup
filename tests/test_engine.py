@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest
 from drive_backup.engine import BackupEngine, _format_mtime
 from drive_backup.scanner import FileEntry
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestFormatMtime:
@@ -191,3 +196,34 @@ class TestBackupEngineUploadErrors:
             assert engine.stats.files_skipped_error == 1
             assert len(engine.stats.error_files) == 1
             assert "Upload failed" in engine.stats.error_files[0].error
+
+    def test_report_upload_error_does_not_fail_backup(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        class FakeDrive:
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return "root_id" if parent_id is None else "reports_id"
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                raise RuntimeError("Report upload failed")
+
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
+
+        config = Config(
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
+        engine = BackupEngine(config, dry_run=False)
+
+        report = engine.run()
+
+        assert report["files_scanned"] == 0

@@ -3,12 +3,22 @@ venv/
 .venv/
 env/
 
+# Local configuration
+config.yaml
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
 # Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
 build/
+.coverage
 
 # Google OAuth credentials (NEVER commit these)
 credentials.json
@@ -19,6 +29,7 @@ token.json
 .idea/
 
 # OS
+.DS_Store
 Thumbs.db
 desktop.ini
 
@@ -26,10 +37,20 @@ desktop.ini
 manifest.json
 
 # Claude
+.claude/
+CLAUDE.md
 scratchpad.md
+
+# Codex
+.codex/
 
 # Credentials 
 credentials.json
 
 # docs
 docs/
+
+# Caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

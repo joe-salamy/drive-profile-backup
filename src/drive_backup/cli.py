@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -148,18 +147,32 @@ def _print_summary(console: Console, report: dict[str, Any]) -> None:
 
     console.print(table)
 
-    # Show top skipped files by size if there are any
-    skipped = report.get("skipped_files", [])
-    if skipped:
-        console.print(f"\n[dim]{len(skipped)} files skipped. " f"Top 10 by size:[/]")
-        top_skipped = sorted(skipped, key=lambda f: f["size_bytes"], reverse=True)[:10]
-        skip_table = Table(show_header=True, header_style="dim")
-        skip_table.add_column("File", max_width=60)
-        skip_table.add_column("Size", justify="right")
-        skip_table.add_column("Reason")
-        for sf in top_skipped:
-            skip_table.add_row(sf["relative_path"], sf["size_human"], sf["reason"])
-        console.print(skip_table)
+    # Show top uploaded (or to-be-uploaded) files by size
+    uploaded = report.get("uploaded_files", [])
+    if uploaded:
+        label = "to upload" if report["dry_run"] else "uploaded"
+        console.print(f"\n[bold]Top 10 biggest files {label}:[/]")
+        top_uploads = sorted(uploaded, key=lambda f: f["size_bytes"], reverse=True)[:10]
+        upload_table = Table(show_header=True, header_style="dim")
+        upload_table.add_column("File", max_width=60)
+        upload_table.add_column("Size", justify="right")
+        upload_table.add_column("Type")
+        for uf in top_uploads:
+            upload_table.add_row(uf["relative_path"], uf["size_human"], uf["extension"])
+        console.print(upload_table)
+
+    # Show breakdown by file type
+    breakdown = report.get("extension_breakdown", [])
+    if breakdown:
+        label = "to upload" if report["dry_run"] else "uploaded"
+        console.print(f"\n[bold]Breakdown by file type ({label}):[/]")
+        bd_table = Table(show_header=True, header_style="dim")
+        bd_table.add_column("Type")
+        bd_table.add_column("Files", justify="right")
+        bd_table.add_column("Size", justify="right")
+        for row in breakdown:
+            bd_table.add_row(row["extension"], str(row["count"]), row["size_human"])
+        console.print(bd_table)
 
     errors = report.get("error_files", [])
     if errors:

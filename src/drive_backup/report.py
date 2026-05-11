@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import cast
 
 from drive_backup.utils import human_size
 
@@ -19,6 +20,16 @@ class SkippedFile:
     size_human: str
     modified: str
     reason: str
+    extension: str
+
+
+@dataclass
+class UploadFile:
+    """A file that was (or will be) uploaded."""
+
+    relative_path: str
+    size_bytes: int
+    size_human: str
     extension: str
 
 
@@ -49,6 +60,7 @@ class BackupStats:
     drive_folder_id: str = ""
     drive_folder_url: str = ""
     skipped_files: list[SkippedFile] = field(default_factory=list)
+    uploaded_files: list[UploadFile] = field(default_factory=list)
     error_files: list[ErrorFile] = field(default_factory=list)
     excluded_directories: list[str] = field(default_factory=list)
 
@@ -68,6 +80,29 @@ class BackupStats:
             parts.append(f"{minutes}m")
         parts.append(f"{seconds}s")
         return " ".join(parts)
+
+
+def _extension_breakdown(
+    uploaded_files: list[UploadFile],
+) -> list[dict[str, object]]:
+    """Aggregate uploaded files by extension, sorted by total size desc."""
+    by_ext: dict[str, dict[str, int]] = {}
+    for uf in uploaded_files:
+        ext = uf.extension or "(no extension)"
+        bucket = by_ext.setdefault(ext, {"count": 0, "size_bytes": 0})
+        bucket["count"] += 1
+        bucket["size_bytes"] += uf.size_bytes
+    rows: list[dict[str, object]] = [
+        {
+            "extension": ext,
+            "count": data["count"],
+            "size_bytes": data["size_bytes"],
+            "size_human": human_size(data["size_bytes"]),
+        }
+        for ext, data in by_ext.items()
+    ]
+    rows.sort(key=lambda r: cast(int, r["size_bytes"]), reverse=True)
+    return rows
 
 
 def generate_report(stats: BackupStats) -> dict[str, object]:
@@ -102,6 +137,16 @@ def generate_report(stats: BackupStats) -> dict[str, object]:
             }
             for sf in stats.skipped_files
         ],
+        "uploaded_files": [
+            {
+                "relative_path": uf.relative_path,
+                "size_bytes": uf.size_bytes,
+                "size_human": uf.size_human,
+                "extension": uf.extension,
+            }
+            for uf in stats.uploaded_files
+        ],
+        "extension_breakdown": _extension_breakdown(stats.uploaded_files),
         "error_files": [
             {
                 "path": ef.path,

@@ -38,6 +38,10 @@ pip install -e ".[dev]"
 
 Edit `config.yaml` to set your backup root, exclusions, and size limits.
 
+```bash
+copy config.example.yaml config.yaml
+```
+
 ## Usage
 
 ### Backup (`drive-backup`)
@@ -96,3 +100,7 @@ The `--full-profile` flag produces additional reports:
 
 - `profile-full-no-appdata-YYYY-MM-DD.md` — full profile scan excluding AppData
 - `profile-full-YYYY-MM-DD.md` — full profile scan including AppData (only with `--include-appdata`)
+
+## License
+
+MIT

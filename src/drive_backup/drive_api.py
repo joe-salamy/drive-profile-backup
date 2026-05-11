@@ -22,6 +22,8 @@ class RateLimiter:
     """Simple rate limiter to stay under Drive's write limit."""
 
     def __init__(self, writes_per_second: float) -> None:
+        if writes_per_second <= 0:
+            raise ValueError("writes_per_second must be greater than 0")
         self._interval = 1.0 / writes_per_second
         self._last_write = 0.0
 
@@ -161,7 +163,7 @@ class DriveAPI:
         resumable: bool = False,
     ) -> dict[str, Any]:
         """Update an existing file on Drive. Returns updated metadata."""
-        from googleapiclient.http import MediaFileUpload  # type: ignore[import-untyped]
+        from googleapiclient.http import MediaFileUpload
 
         media = MediaFileUpload(
             local_path,
