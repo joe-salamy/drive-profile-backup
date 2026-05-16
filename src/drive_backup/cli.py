@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from rich.console import Console
 
+    from drive_backup.config import Config
     from drive_backup.scanner import FileEntry
 
 
@@ -74,7 +75,6 @@ def main(argv: list[str] | None = None) -> None:
         Progress,
         TextColumn,
         TimeElapsedColumn,
-        TransferSpeedColumn,
     )
 
     from drive_backup.config import load_config
@@ -111,21 +111,17 @@ def main(argv: list[str] | None = None) -> None:
         BarColumn(),
         MofNCompleteColumn(),
         TextColumn("|"),
-        TransferSpeedColumn(),
-        TextColumn("|"),
         TimeElapsedColumn(),
         console=console,
     )
 
     scan_task = None
-    uploaded_bytes = 0
+    total_files = _count_scan_entries(config)
 
     def progress_callback(file: FileEntry, action: str) -> None:
-        nonlocal uploaded_bytes
         if scan_task is not None:
             progress.advance(scan_task)
         if action.startswith("uploaded:") or action.startswith("would_upload:"):
-            uploaded_bytes += file.size
             if args.verbose:
                 tag = "UPLOAD" if action.startswith("uploaded:") else "WOULD UPLOAD"
                 console.print(f"  [{tag}] {file.relative_path} ({file.size_human})")
@@ -136,13 +132,20 @@ def main(argv: list[str] | None = None) -> None:
     with progress:
         scan_task = progress.add_task(
             "Backing up..." if not args.dry_run else "Scanning (dry run)...",
-            total=None,  # Unknown total until scan completes
+            total=total_files,
         )
         report = engine.run(progress_callback=progress_callback)
 
     # Print summary
     console.print()
     _print_summary(console, report)
+
+
+def _count_scan_entries(config: Config) -> int:
+    """Return the number of files the backup engine will process."""
+    from drive_backup.scanner import scan
+
+    return sum(1 for _ in scan(config))
 
 
 def _print_summary(console: Console, report: dict[str, Any]) -> None:
