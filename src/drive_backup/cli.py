@@ -34,22 +34,7 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Ignore manifest, re-upload everything",
     )
-    parser.add_argument(
-        "--migrate-profile",
-        action="store_true",
-        help="Preview migration from legacy folder layout to profile layout",
-    )
-    parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Apply --migrate-profile changes",
-    )
     args = parser.parse_args(argv)
-
-    if args.apply and not args.migrate_profile:
-        parser.error("--apply can only be used with --migrate-profile")
-    if args.migrate_profile and (args.dry_run or args.full):
-        parser.error("--migrate-profile cannot be combined with --dry-run or --full")
 
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -79,25 +64,17 @@ def main(argv: list[str] | None = None) -> None:
 
     from drive_backup.config import load_config
     from drive_backup.engine import BackupEngine
-    from drive_backup.migration import MigrationError, migrate_profile
 
     console = Console()
 
     # Load config
-    config = load_config("config.yaml")
+    try:
+        config = load_config("config.yaml")
+    except ValueError as e:
+        console.print(f"[red]Configuration failed:[/] {e}")
+        raise SystemExit(1) from e
     console.print(f"[bold]Backup root:[/] {config.backup_root}")
-    if config.profile_name:
-        console.print(f"[bold]Profile:[/] {config.profile_name}")
-
-    if args.migrate_profile:
-        try:
-            result = migrate_profile(config, apply=args.apply)
-        except MigrationError as e:
-            console.print(f"[red]Migration failed:[/] {e}")
-            raise SystemExit(1) from e
-
-        _print_migration_summary(console, result)
-        return
+    console.print(f"[bold]Profile:[/] {config.profile_name}")
 
     if args.dry_run:
         console.print("[yellow]DRY RUN - no files will be uploaded[/]")
@@ -209,29 +186,6 @@ def _print_summary(console: Console, report: dict[str, Any]) -> None:
     errors = report.get("error_files", [])
     if errors:
         console.print(f"\n[red]{len(errors)} files had errors.[/]")
-
-
-def _print_migration_summary(console: Console, result: Any) -> None:
-    """Print migration preview/apply output."""
-    from rich.table import Table
-
-    title = "Profile Migration Applied" if result.applied else "Profile Migration Plan"
-    table = Table(title=title, show_header=False)
-    table.add_column("Key", style="bold")
-    table.add_column("Value")
-
-    mode = "[green]APPLIED[/]" if result.applied else "[yellow]PREVIEW[/]"
-    table.add_row("Mode", mode)
-    table.add_row("Legacy folder ID", result.legacy_folder_id)
-    if result.parent_folder_id:
-        table.add_row("Parent folder ID", result.parent_folder_id)
-    if result.profile_folder_id:
-        table.add_row("Profile folder ID", result.profile_folder_id)
-    console.print(table)
-
-    console.print("\n[bold]Actions:[/]")
-    for action in result.actions:
-        console.print(f"  - {action}")
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@ class TestBackupEngineDryRun:
             manifest_path = os.path.join(tmp, "manifest.json")
 
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -58,6 +59,7 @@ class TestBackupEngineDryRun:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(tmp, {"file.txt": "data"})
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -84,6 +86,7 @@ class TestBackupEngineDryRun:
                 },
             )
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=["Thumbs.db"],
@@ -101,6 +104,7 @@ class TestBackupEngineDryRun:
             manifest_dir = tempfile.mkdtemp()
             manifest_path = os.path.join(manifest_dir, "manifest.json")
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -134,6 +138,7 @@ class TestBackupEngineDryRun:
             manifest_dir = tempfile.mkdtemp()
             manifest_path = os.path.join(manifest_dir, "manifest.json")
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -169,6 +174,7 @@ class TestBackupEngineUploadErrors:
                 f.write("test")
 
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -217,6 +223,7 @@ class TestBackupEngineUploadErrors:
         monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
 
         config = Config(
+            profile_name="laptop-a",
             backup_root=str(tmp_path),
             exclude_dirs=[],
             exclude_files=[],
@@ -229,17 +236,7 @@ class TestBackupEngineUploadErrors:
         assert report["files_scanned"] == 0
 
 
-class TestBackupEngineDriveFolders:
-    def test_legacy_mode_uses_drive_folder_name(self) -> None:
-        config = Config(drive_folder_name="Legacy Backup")
-        engine = BackupEngine(config)
-        mock_drive = MagicMock()
-        mock_drive.get_or_create_folder.return_value = "legacy_id"
-        engine.drive = mock_drive
-
-        assert engine._resolve_backup_folder() == "legacy_id"
-        mock_drive.get_or_create_folder.assert_called_once_with("Legacy Backup")
-
+class TestBackupEngineProfileFolders:
     def test_profile_mode_uses_parent_and_profile_folder(self) -> None:
         config = Config(
             profile_name="laptop-a",

@@ -31,7 +31,12 @@ class TestScanner:
                     "subdir/file2.txt": "world",
                 },
             )
-            config = Config(backup_root=tmp, exclude_dirs=[], exclude_files=[])
+            config = Config(
+                profile_name="laptop-a",
+                backup_root=tmp,
+                exclude_dirs=[],
+                exclude_files=[],
+            )
             entries = list(scan(config))
 
             paths = {e.relative_path for e in entries}
@@ -50,6 +55,7 @@ class TestScanner:
                 },
             )
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=["venv", "__pycache__"],
                 exclude_files=[],
@@ -72,6 +78,7 @@ class TestScanner:
                 },
             )
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=["Thumbs.db", "desktop.ini"],
@@ -96,6 +103,7 @@ class TestScanner:
                 },
             )
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -118,6 +126,7 @@ class TestScanner:
                 },
             )
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -141,6 +150,7 @@ class TestScanner:
                 },
             )
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -155,6 +165,7 @@ class TestScanner:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(tmp, {"Thumbs.db": "data"})
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=["Thumbs.db"],
@@ -178,6 +189,7 @@ class TestScanner:
                 },
             )
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -201,6 +213,7 @@ class TestScanner:
                 },
             )
             config = Config(
+                profile_name="laptop-a",
                 backup_root=tmp,
                 exclude_dirs=[],
                 exclude_files=[],
@@ -216,6 +229,7 @@ class TestScanner:
 
     def test_nonexistent_backup_root_yields_nothing(self) -> None:
         config = Config(
+            profile_name="laptop-a",
             backup_root="/nonexistent/path/that/does/not/exist",
             exclude_dirs=[],
             exclude_files=[],
@@ -244,6 +258,7 @@ class TestScanner:
         monkeypatch.setattr(scanner, "_MAX_PATH", 10)
 
         config = Config(
+            profile_name="laptop-a",
             backup_root=str(tmp_path),
             exclude_dirs=[],
             exclude_files=[],

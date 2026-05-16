@@ -13,9 +13,9 @@ Incrementally back up your Windows user profile to Google Drive. First run uploa
 
 ## Where Files Go
 
-By default, files are uploaded to a top-level Google Drive folder named by `drive_folder_name` in `config.yaml` (default: `Profile Backup`). The local directory structure is mirrored inside that folder, and JSON backup reports are saved to a `_reports` subfolder within it.
+Files are uploaded to `drive_parent_folder_name/<profile_name>/` in Google Drive. The local directory structure is mirrored inside that profile folder, and JSON backup reports are saved to a `_reports` subfolder within it.
 
-For backups from more than one laptop to the same Drive account, set a different `profile_name` on each laptop:
+Set a different required `profile_name` on each laptop that backs up to the same Drive account:
 
 ```yaml
 profile_name: "thinkpad"
@@ -61,7 +61,7 @@ drive-backup [--dry-run] [--full] [--verbose]
 
 | Flag        | Description                                                                                                                         |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `--dry-run` | Scan and report only — no files are uploaded. Shows what _would_ be uploaded and saves a JSON report to `~/.drive-backup/reports/`. |
+| `--dry-run` | Scan and report only — no files are uploaded. Shows what _would_ be uploaded and saves a JSON report alongside the profile manifest. |
 | `--full`    | Ignore the local manifest and re-upload every eligible file, even if it hasn't changed since the last run.                          |
 | `--verbose` | Print each file as it is processed, including skip reasons and upload actions. Also sets log level to DEBUG.                        |
 
@@ -77,22 +77,6 @@ drive-backup
 # Re-upload everything (ignore manifest)
 drive-backup --full
 ```
-
-### Migrate an existing backup to profile mode
-
-After adding `profile_name` to `config.yaml`, preview the one-time migration:
-
-```bash
-drive-backup --migrate-profile
-```
-
-Apply it after reviewing the plan:
-
-```bash
-drive-backup --migrate-profile --apply
-```
-
-This moves the existing Drive folder under `drive_parent_folder_name`, renames it to `profile_name`, and copies the old local manifest into the profile-specific manifest path if needed.
 
 ### Summary report (`scripts/generate_summary.py`)
 

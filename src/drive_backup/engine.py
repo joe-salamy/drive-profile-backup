@@ -126,9 +126,6 @@ class BackupEngine:
         """Return the Drive folder ID used as the backup root."""
         assert self.drive is not None
 
-        if not self.config.profile_name:
-            return self.drive.get_or_create_folder(self.config.drive_folder_name)
-
         parent_id = self.drive.get_or_create_folder(
             self.config.drive_parent_folder_name
         )

@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 
 from drive_backup.cli import _count_scan_entries, main
 from drive_backup.config import Config
-from drive_backup.migration import MigrationResult
 from drive_backup.utils import human_size
 
 
@@ -33,6 +32,7 @@ class TestCliMain:
         (tmp_path / "Thumbs.db").write_text("skip")
 
         config = Config(
+            profile_name="laptop-a",
             backup_root=str(tmp_path),
             exclude_dirs=[],
             exclude_files=["Thumbs.db"],
@@ -70,6 +70,7 @@ class TestCliMain:
 
         (tmp_path / "test.txt").write_text("hello")
         (tmp_path / "config.yaml").write_text(
+            "profile_name: laptop-a\n"
             f"backup_root: {tmp_path}\n"
             "exclude_dirs: []\n"
             "exclude_files: []\n"
@@ -88,6 +89,7 @@ class TestCliMain:
     ) -> None:
         (tmp_path / "test.txt").write_text("hello")
         (tmp_path / "config.yaml").write_text(
+            "profile_name: laptop-a\n"
             f"backup_root: {tmp_path}\n"
             "exclude_dirs: []\n"
             "exclude_files: []\n"
@@ -102,6 +104,7 @@ class TestCliMain:
     ) -> None:
         (tmp_path / "test.txt").write_text("hello")
         (tmp_path / "config.yaml").write_text(
+            "profile_name: laptop-a\n"
             f"backup_root: {tmp_path}\n"
             "exclude_dirs: []\n"
             "exclude_files: []\n"
@@ -110,40 +113,3 @@ class TestCliMain:
 
         monkeypatch.chdir(tmp_path)
         main(["--dry-run", "--verbose"])
-
-    def test_migrate_profile_preview(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
-    ) -> None:
-        (tmp_path / "config.yaml").write_text(
-            "profile_name: laptop-a\n",
-            encoding="utf-8",
-        )
-
-        def fake_migrate(config: object, apply: bool = False) -> MigrationResult:
-            assert apply is False
-            return MigrationResult(
-                applied=False,
-                legacy_folder_id="legacy_id",
-                actions=["preview migration"],
-            )
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("drive_backup.migration.migrate_profile", fake_migrate)
-
-        main(["--migrate-profile"])
-
-    def test_apply_requires_migrate_profile(self) -> None:
-        try:
-            main(["--apply"])
-        except SystemExit as e:
-            assert e.code == 2
-        else:
-            raise AssertionError("Expected SystemExit")
-
-    def test_migrate_profile_rejects_backup_flags(self) -> None:
-        try:
-            main(["--migrate-profile", "--dry-run"])
-        except SystemExit as e:
-            assert e.code == 2
-        else:
-            raise AssertionError("Expected SystemExit")

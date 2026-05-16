@@ -75,11 +75,10 @@ no_size_limit:
   - ".ogg"
 
 # Google Drive settings
-# Set profile_name on each laptop to keep backups separate under one account.
+# Required: set profile_name on each laptop to keep backups separate under one account.
 # Example: "thinkpad" on one laptop, "surface" on another.
-profile_name: ""
+profile_name: "laptop-a"
 drive_parent_folder_name: "Profile Backups"
-drive_folder_name: "Profile Backup"
 
 # Where to store local state
 # In profile mode, the default manifest path is:
