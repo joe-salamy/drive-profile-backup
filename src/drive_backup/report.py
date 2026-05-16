@@ -57,6 +57,8 @@ class BackupStats:
     bytes_total_eligible: int = 0
     start_time: float = 0
     end_time: float = 0
+    profile_name: str = ""
+    drive_parent_folder_id: str = ""
     drive_folder_id: str = ""
     drive_folder_url: str = ""
     skipped_files: list[SkippedFile] = field(default_factory=list)
@@ -112,6 +114,7 @@ def generate_report(stats: BackupStats) -> dict[str, object]:
         "duration_seconds": round(stats.duration_seconds, 2),
         "duration_human": stats.duration_human,
         "backup_root": stats.backup_root,
+        "profile_name": stats.profile_name,
         "dry_run": stats.dry_run,
         "files_scanned": stats.files_scanned,
         "files_uploaded": stats.files_uploaded,
@@ -123,6 +126,7 @@ def generate_report(stats: BackupStats) -> dict[str, object]:
         "total_size_uploaded_human": human_size(stats.bytes_uploaded),
         "total_bytes_eligible": stats.bytes_total_eligible,
         "total_size_eligible_human": human_size(stats.bytes_total_eligible),
+        "drive_parent_folder_id": stats.drive_parent_folder_id,
         "drive_folder_id": stats.drive_folder_id,
         "drive_folder_url": stats.drive_folder_url,
         "skipped_files": [

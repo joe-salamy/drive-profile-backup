@@ -227,3 +227,35 @@ class TestBackupEngineUploadErrors:
         report = engine.run()
 
         assert report["files_scanned"] == 0
+
+
+class TestBackupEngineDriveFolders:
+    def test_legacy_mode_uses_drive_folder_name(self) -> None:
+        config = Config(drive_folder_name="Legacy Backup")
+        engine = BackupEngine(config)
+        mock_drive = MagicMock()
+        mock_drive.get_or_create_folder.return_value = "legacy_id"
+        engine.drive = mock_drive
+
+        assert engine._resolve_backup_folder() == "legacy_id"
+        mock_drive.get_or_create_folder.assert_called_once_with("Legacy Backup")
+
+    def test_profile_mode_uses_parent_and_profile_folder(self) -> None:
+        config = Config(
+            profile_name="laptop-a",
+            drive_parent_folder_name="Profile Backups",
+        )
+        engine = BackupEngine(config)
+        mock_drive = MagicMock()
+        mock_drive.get_or_create_folder.side_effect = ["parent_id", "profile_id"]
+        engine.drive = mock_drive
+
+        assert engine._resolve_backup_folder() == "profile_id"
+        assert engine.stats.drive_parent_folder_id == "parent_id"
+        assert mock_drive.get_or_create_folder.call_args_list[0].args == (
+            "Profile Backups",
+        )
+        assert mock_drive.get_or_create_folder.call_args_list[1].args == (
+            "laptop-a",
+            "parent_id",
+        )

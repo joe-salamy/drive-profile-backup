@@ -11,9 +11,18 @@ Incrementally back up your Windows user profile to Google Drive. First run uploa
 - **Progress bar** — live upload progress via `rich`
 - **Resumable uploads** — large files use resumable uploads with retry logic
 
-## Where files go
+## Where Files Go
 
-Files are uploaded to a top-level Google Drive folder named by `drive_folder_name` in `config.yaml` (default: `Profile Backup`). The local directory structure is mirrored inside that folder, and JSON backup reports are saved to a `_reports` subfolder within it.
+By default, files are uploaded to a top-level Google Drive folder named by `drive_folder_name` in `config.yaml` (default: `Profile Backup`). The local directory structure is mirrored inside that folder, and JSON backup reports are saved to a `_reports` subfolder within it.
+
+For backups from more than one laptop to the same Drive account, set a different `profile_name` on each laptop:
+
+```yaml
+profile_name: "thinkpad"
+drive_parent_folder_name: "Profile Backups"
+```
+
+Profile mode uploads to `Profile Backups/<profile_name>/` and stores local state at `~/.drive-backup/profiles/<profile_name>/manifest.json` unless `manifest_path` is explicitly set.
 
 ## Setup
 
@@ -36,7 +45,7 @@ pip install -e ".[dev]"
 
 ### 3. Configure
 
-Edit `config.yaml` to set your backup root, exclusions, and size limits.
+Edit `config.yaml` to set your backup root, profile name, exclusions, and size limits.
 
 ```bash
 copy config.example.yaml config.yaml
@@ -68,6 +77,22 @@ drive-backup
 # Re-upload everything (ignore manifest)
 drive-backup --full
 ```
+
+### Migrate an existing backup to profile mode
+
+After adding `profile_name` to `config.yaml`, preview the one-time migration:
+
+```bash
+drive-backup --migrate-profile
+```
+
+Apply it after reviewing the plan:
+
+```bash
+drive-backup --migrate-profile --apply
+```
+
+This moves the existing Drive folder under `drive_parent_folder_name`, renames it to `profile_name`, and copies the old local manifest into the profile-specific manifest path if needed.
 
 ### Summary report (`scripts/generate_summary.py`)
 

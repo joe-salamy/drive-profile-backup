@@ -60,6 +60,7 @@ class TestGenerateReport:
         stats = BackupStats(
             backup_root="C:\\Users\\test",
             dry_run=True,
+            profile_name="laptop-a",
             files_scanned=100,
             files_uploaded=10,
             files_skipped_dedup=80,
@@ -72,6 +73,7 @@ class TestGenerateReport:
         )
         report = generate_report(stats)
         assert report["backup_root"] == "C:\\Users\\test"
+        assert report["profile_name"] == "laptop-a"
         assert report["dry_run"] is True
         assert report["files_scanned"] == 100
         assert report["files_uploaded"] == 10

@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+DEFAULT_MANIFEST_PATH = "~/.drive-backup/manifest.json"
+
 
 @dataclass
 class Config:
@@ -74,8 +76,10 @@ class Config:
             ".ogg",
         ]
     )
+    profile_name: str = ""
+    drive_parent_folder_name: str = "Profile Backups"
     drive_folder_name: str = "Profile Backup"
-    manifest_path: str = "~/.drive-backup/manifest.json"
+    manifest_path: str = DEFAULT_MANIFEST_PATH
     credentials_path: str = "credentials.json"
     token_path: str = "~/.drive-backup/token.json"
     resumable_threshold_mb: float = 5
@@ -85,6 +89,17 @@ class Config:
     def __post_init__(self) -> None:
         if not self.backup_root:
             self.backup_root = str(Path.home())
+
+        raw_profile_name = self.profile_name
+        self.profile_name = self.profile_name.strip()
+        if raw_profile_name and not self.profile_name:
+            raise ValueError("profile_name must not be empty")
+        if self.profile_name:
+            _validate_profile_name(self.profile_name)
+            if self.manifest_path == DEFAULT_MANIFEST_PATH:
+                self.manifest_path = (
+                    f"~/.drive-backup/profiles/{self.profile_name}/manifest.json"
+                )
 
         if self.max_file_size_mb < 0:
             raise ValueError("max_file_size_mb must be non-negative")
@@ -137,6 +152,16 @@ class Config:
                 return 0  # Skip entirely
             return int(limit_mb * 1024 * 1024)
         return self.max_file_size_bytes
+
+
+def _validate_profile_name(profile_name: str) -> None:
+    """Validate a profile name for Drive and local state paths."""
+    if not profile_name:
+        raise ValueError("profile_name must not be empty")
+    if "/" in profile_name or "\\" in profile_name:
+        raise ValueError("profile_name must not contain slashes")
+    if any(ord(char) < 32 for char in profile_name):
+        raise ValueError("profile_name must not contain control characters")
 
 
 def load_config(path: str | Path) -> Config:

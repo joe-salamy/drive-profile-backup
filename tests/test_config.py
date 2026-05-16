@@ -53,6 +53,29 @@ class TestConfigDefaults:
         config = Config(manifest_path="~/test.json")
         assert "~" not in config.manifest_path
 
+    def test_profile_derives_manifest_path(self) -> None:
+        config = Config(profile_name="laptop-a")
+        assert config.profile_name == "laptop-a"
+        path_parts = Path(config.manifest_path).parts
+        assert path_parts[-4:] == (
+            ".drive-backup",
+            "profiles",
+            "laptop-a",
+            "manifest.json",
+        )
+
+    def test_profile_preserves_custom_manifest_path(self) -> None:
+        config = Config(profile_name="laptop-a", manifest_path="~/custom.json")
+        assert config.manifest_path.endswith("custom.json")
+
+    def test_rejects_invalid_profile_name(self) -> None:
+        with pytest.raises(ValueError, match="profile_name"):
+            Config(profile_name=" ")
+        with pytest.raises(ValueError, match="slashes"):
+            Config(profile_name="laptop/a")
+        with pytest.raises(ValueError, match="control"):
+            Config(profile_name="lap\ntop")
+
     def test_rejects_invalid_numeric_values(self) -> None:
         with pytest.raises(ValueError, match="writes_per_second"):
             Config(writes_per_second=0)

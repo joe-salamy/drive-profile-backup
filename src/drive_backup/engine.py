@@ -39,6 +39,7 @@ class BackupEngine:
         self.stats = BackupStats(
             backup_root=config.backup_root,
             dry_run=dry_run,
+            profile_name=config.profile_name,
         )
         self.manifest = Manifest()
         self.drive: DriveAPI | None = None  # Lazy: imported only when needed
@@ -76,9 +77,7 @@ class BackupEngine:
                 max_retries=self.config.max_retries,
             )
             self.drive.authenticate()
-            self._root_folder_id = self.drive.get_or_create_folder(
-                self.config.drive_folder_name
-            )
+            self._root_folder_id = self._resolve_backup_folder()
             self.stats.drive_folder_id = self._root_folder_id
             self.stats.drive_folder_url = (
                 f"https://drive.google.com/drive/folders/{self._root_folder_id}"
@@ -122,6 +121,19 @@ class BackupEngine:
                 logger.warning("Report upload failed: %s", e)
 
         return report
+
+    def _resolve_backup_folder(self) -> str:
+        """Return the Drive folder ID used as the backup root."""
+        assert self.drive is not None
+
+        if not self.config.profile_name:
+            return self.drive.get_or_create_folder(self.config.drive_folder_name)
+
+        parent_id = self.drive.get_or_create_folder(
+            self.config.drive_parent_folder_name
+        )
+        self.stats.drive_parent_folder_id = parent_id
+        return self.drive.get_or_create_folder(self.config.profile_name, parent_id)
 
     def _process_file(
         self,

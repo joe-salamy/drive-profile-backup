@@ -7,6 +7,7 @@ import os
 import random
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,15 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 # MIME type for Google Drive folders
 FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
+@dataclass(frozen=True)
+class DriveFolder:
+    """Minimal Drive folder metadata used for migration."""
+
+    id: str
+    name: str
+    parents: list[str]
 
 
 class RateLimiter:
@@ -127,6 +137,66 @@ class DriveAPI:
 
         self._folder_cache[cache_key] = folder_id
         return folder_id
+
+    def find_folders(
+        self, name: str, parent_id: str | None = None
+    ) -> list[DriveFolder]:
+        """Find non-trashed Drive folders by name and optional parent."""
+        safe_name = name.replace("\\", "\\\\").replace("'", "\\'")
+        query = f"name='{safe_name}' and mimeType='{FOLDER_MIME}' and trashed=false"
+        if parent_id:
+            query += f" and '{parent_id}' in parents"
+
+        results = (
+            self.service.files()
+            .list(q=query, spaces="drive", fields="files(id, name, parents)")
+            .execute()
+        )
+        return [
+            DriveFolder(
+                id=str(folder["id"]),
+                name=str(folder["name"]),
+                parents=[str(parent) for parent in folder.get("parents", [])],
+            )
+            for folder in results.get("files", [])
+        ]
+
+    def rename_and_move_folder(
+        self,
+        folder_id: str,
+        new_name: str,
+        new_parent_id: str,
+        old_parent_ids: list[str],
+    ) -> dict[str, Any]:
+        """Rename a folder and move it under a new parent."""
+        return self._execute_with_retry(
+            lambda: self._do_rename_and_move_folder(
+                folder_id=folder_id,
+                new_name=new_name,
+                new_parent_id=new_parent_id,
+                old_parent_ids=old_parent_ids,
+            )
+        )
+
+    def _do_rename_and_move_folder(
+        self,
+        folder_id: str,
+        new_name: str,
+        new_parent_id: str,
+        old_parent_ids: list[str],
+    ) -> dict[str, Any]:
+        self._rate_limiter.wait()
+        update_kwargs: dict[str, Any] = {
+            "fileId": folder_id,
+            "body": {"name": new_name},
+            "addParents": new_parent_id,
+            "fields": "id, name, parents",
+        }
+        if old_parent_ids:
+            update_kwargs["removeParents"] = ",".join(old_parent_ids)
+        result: dict[str, Any] = self.service.files().update(**update_kwargs).execute()
+        self._folder_cache.clear()
+        return result
 
     def ensure_folder_path(self, path_parts: list[str], root_id: str) -> str:
         """Recursively create the folder hierarchy, returning the leaf folder ID."""
