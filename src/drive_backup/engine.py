@@ -4,22 +4,26 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from drive_backup.config import Config
-from drive_backup.dedup import Manifest, compute_md5, needs_upload
+from drive_backup.dedup import Manifest, ManifestEntry, compute_md5, needs_upload
 from drive_backup.report import (
     BackupStats,
     ErrorFile,
+    PruneError,
+    PrunedFile,
     SkippedFile,
     UploadFile,
     generate_report,
     save_report,
 )
 from drive_backup.scanner import FileEntry, scan
+from drive_backup.utils import human_size
 
 if TYPE_CHECKING:
     from drive_backup.drive_api import DriveAPI
@@ -31,15 +35,21 @@ class BackupEngine:
     """Orchestrates the full backup flow."""
 
     def __init__(
-        self, config: Config, dry_run: bool = False, full: bool = False
+        self,
+        config: Config,
+        dry_run: bool = False,
+        full: bool = False,
+        prune: bool = False,
     ) -> None:
         self.config = config
         self.dry_run = dry_run
         self.full = full  # Ignore manifest, re-upload everything
+        self.prune = prune
         self.stats = BackupStats(
             backup_root=config.backup_root,
             dry_run=dry_run,
             profile_name=config.profile_name,
+            prune_enabled=prune,
         )
         self.manifest = Manifest()
         self.drive: DriveAPI | None = None  # Lazy: imported only when needed
@@ -87,6 +97,22 @@ class BackupEngine:
         for file_entry in scan(self.config):
             self.stats.files_scanned += 1
             self._process_file(file_entry, progress_callback)
+
+        if self.prune:
+            if self.full:
+                self.stats.prune_skipped_reason = (
+                    "Skipped prune because --full ignores the manifest"
+                )
+            elif not os.path.isdir(self.config.backup_root):
+                self.stats.prune_skipped_reason = (
+                    "Skipped prune because backup root is unavailable"
+                )
+            elif not self.dry_run and self.stats.files_skipped_error > 0:
+                self.stats.prune_skipped_reason = (
+                    "Skipped prune because backup had file or upload errors"
+                )
+            else:
+                self._prune_stale_manifest_entries()
 
         self.stats.end_time = time.time()
 
@@ -216,6 +242,83 @@ class BackupEngine:
                 extension=file.extension or "(no extension)",
             )
         )
+
+    def _local_path_for_manifest_key(self, relative_path: str) -> str:
+        """Return the local filesystem path represented by a manifest key."""
+        if os.path.isabs(relative_path):
+            local_path = relative_path.replace("/", os.sep)
+        else:
+            local_path = os.path.join(
+                self.config.backup_root, *relative_path.split("/")
+            )
+
+        if (
+            sys.platform == "win32"
+            and len(local_path) >= 260
+            and not local_path.startswith("\\\\?\\")
+        ):
+            local_path = "\\\\?\\" + local_path
+
+        return local_path
+
+    def _manifest_key_exists_locally(self, relative_path: str) -> bool:
+        """Return whether a manifest key still points to a local file."""
+        return os.path.isfile(self._local_path_for_manifest_key(relative_path))
+
+    def _stale_manifest_entries(self) -> list[tuple[str, ManifestEntry]]:
+        """Return manifest entries whose local files no longer exist."""
+        return [
+            (rel_path, entry)
+            for rel_path, entry in sorted(self.manifest.entries.items())
+            if not self._manifest_key_exists_locally(rel_path)
+        ]
+
+    def _record_pruned_file(self, relative_path: str, entry: ManifestEntry) -> None:
+        """Track a pruned (or would-be-pruned) Drive file for reporting."""
+        self.stats.files_pruned += 1
+        self.stats.bytes_pruned += entry.size
+        self.stats.pruned_files.append(
+            PrunedFile(
+                relative_path=relative_path,
+                drive_file_id=entry.drive_file_id,
+                size_bytes=entry.size,
+                size_human=human_size(entry.size),
+            )
+        )
+
+    def _prune_stale_manifest_entries(self) -> None:
+        """Move stale Drive files to trash and remove successful manifest entries."""
+        for relative_path, entry in self._stale_manifest_entries():
+            if not entry.drive_file_id:
+                self.stats.files_prune_failed += 1
+                self.stats.prune_error_files.append(
+                    PruneError(
+                        relative_path=relative_path,
+                        drive_file_id=entry.drive_file_id,
+                        error="missing Drive file ID",
+                    )
+                )
+                continue
+
+            if self.dry_run:
+                self._record_pruned_file(relative_path, entry)
+                continue
+
+            try:
+                assert self.drive is not None
+                self.drive.trash_file(entry.drive_file_id)
+                self._record_pruned_file(relative_path, entry)
+                self.manifest.remove(relative_path)
+            except Exception as e:
+                logger.error("Failed to prune %s: %s", relative_path, e)
+                self.stats.files_prune_failed += 1
+                self.stats.prune_error_files.append(
+                    PruneError(
+                        relative_path=relative_path,
+                        drive_file_id=entry.drive_file_id,
+                        error=str(e),
+                    )
+                )
 
     def _upload_file(self, file: FileEntry, reason: str) -> None:
         """Upload a single file to Drive and update the manifest."""

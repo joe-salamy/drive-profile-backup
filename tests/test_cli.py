@@ -6,14 +6,38 @@ import sys
 import types
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
-from drive_backup.cli import main
+from drive_backup.cli import _print_summary, main
 from drive_backup.config import Config
 from drive_backup.utils import human_size
+
+
+def _minimal_report(**overrides: object) -> dict[str, object]:
+    report: dict[str, object] = {
+        "dry_run": True,
+        "duration_human": "0s",
+        "files_scanned": 1,
+        "files_uploaded": 1,
+        "files_skipped_dedup": 0,
+        "files_skipped_exclusion": 0,
+        "files_skipped_error": 0,
+        "total_size_uploaded_human": "5.0 B",
+        "total_size_eligible_human": "5.0 B",
+        "uploaded_files": [],
+        "extension_breakdown": [],
+        "error_files": [],
+        "prune_enabled": False,
+        "files_pruned": 0,
+        "files_prune_failed": 0,
+        "total_size_pruned_human": "0.0 B",
+        "pruned_files": [],
+        "prune_skipped_reason": "",
+        "prune_error_files": [],
+    }
+    report.update(overrides)
+    return report
 
 
 class TestCliHumanSize:
@@ -66,9 +90,12 @@ class TestCliMain:
                 events.append(("advance", task_id))
 
         class FakeBackupEngine:
-            def __init__(self, config: Config, *, dry_run: bool, full: bool) -> None:
+            def __init__(
+                self, config: Config, *, dry_run: bool, full: bool, prune: bool
+            ) -> None:
                 assert dry_run is True
                 assert full is False
+                assert prune is False
 
             def run(
                 self, *, progress_callback: Callable[[object, str], None]
@@ -76,20 +103,7 @@ class TestCliMain:
                 assert "progress_enter" in events
                 events.append("engine_run")
                 progress_callback(object(), "would_upload:test.txt")
-                return {
-                    "dry_run": True,
-                    "duration_human": "0s",
-                    "files_scanned": 1,
-                    "files_uploaded": 1,
-                    "files_skipped_dedup": 0,
-                    "files_skipped_exclusion": 0,
-                    "files_skipped_error": 0,
-                    "total_size_uploaded_human": "5.0 B",
-                    "total_size_eligible_human": "5.0 B",
-                    "uploaded_files": [],
-                    "extension_breakdown": [],
-                    "error_files": [],
-                }
+                return _minimal_report()
 
         def fail_if_scanned_before_progress(config: Config) -> object:
             events.append("scan_started")
@@ -179,3 +193,111 @@ class TestCliMain:
 
         monkeypatch.chdir(tmp_path)
         main(["--dry-run", "--verbose"])
+
+    def test_prune_flag_is_passed_to_engine(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        captured: dict[str, bool] = {}
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
+
+        class FakeBackupEngine:
+            def __init__(
+                self, config: Config, *, dry_run: bool, full: bool, prune: bool
+            ) -> None:
+                captured["dry_run"] = dry_run
+                captured["full"] = full
+                captured["prune"] = prune
+
+            def run(
+                self, *, progress_callback: Callable[[object, str], None]
+            ) -> dict[str, object]:
+                return _minimal_report(dry_run=True, prune_enabled=True)
+
+        monkeypatch.setattr("drive_backup.config.load_config", lambda path: config)
+        monkeypatch.setattr("drive_backup.engine.BackupEngine", FakeBackupEngine)
+
+        main(["--dry-run", "--prune"])
+
+        assert captured == {"dry_run": True, "full": False, "prune": True}
+
+    def test_verbose_prune_lists_all_would_prune_files(self) -> None:
+        from rich.console import Console
+
+        console = Console(record=True, width=120)
+        report = _minimal_report(
+            dry_run=True,
+            prune_enabled=True,
+            files_pruned=2,
+            total_size_pruned_human="3.0 KB",
+            pruned_files=[
+                {
+                    "relative_path": "z-old.txt",
+                    "drive_file_id": "drive_z",
+                    "size_bytes": 1024,
+                    "size_human": "1.0 KB",
+                },
+                {
+                    "relative_path": "a-old.txt",
+                    "drive_file_id": "drive_a",
+                    "size_bytes": 2048,
+                    "size_human": "2.0 KB",
+                },
+            ],
+        )
+
+        _print_summary(console, report, verbose=True)
+        output = console.export_text()
+
+        assert "Files to prune:" in output
+        assert "a-old.txt" in output
+        assert "z-old.txt" in output
+
+    def test_full_and_prune_are_rejected(self) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--full", "--prune"])
+
+        assert exc_info.value.code != 0
+
+    @pytest.mark.parametrize(
+        ("dry_run", "expected_files_label", "expected_size_label"),
+        [
+            (True, "Files to prune", "Size to prune"),
+            (False, "Files pruned", "Size pruned"),
+        ],
+    )
+    def test_print_summary_includes_prune_rows(
+        self,
+        dry_run: bool,
+        expected_files_label: str,
+        expected_size_label: str,
+    ) -> None:
+        from rich.console import Console
+
+        console = Console(record=True, width=120)
+        report = _minimal_report(
+            dry_run=dry_run,
+            prune_enabled=True,
+            files_uploaded=0,
+            files_pruned=2,
+            total_size_pruned_human="3.0 KB",
+            pruned_files=[
+                {
+                    "relative_path": "old/file.txt",
+                    "drive_file_id": "drive_old",
+                    "size_bytes": 3072,
+                    "size_human": "3.0 KB",
+                }
+            ],
+        )
+
+        _print_summary(console, report)
+        output = console.export_text()
+
+        assert expected_files_label in output
+        assert expected_size_label in output

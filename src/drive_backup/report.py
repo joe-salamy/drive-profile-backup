@@ -43,6 +43,25 @@ class ErrorFile:
 
 
 @dataclass
+class PrunedFile:
+    """A Drive file that was (or will be) pruned."""
+
+    relative_path: str
+    drive_file_id: str
+    size_bytes: int
+    size_human: str
+
+
+@dataclass
+class PruneError:
+    """A Drive prune operation that failed."""
+
+    relative_path: str
+    drive_file_id: str
+    error: str
+
+
+@dataclass
 class BackupStats:
     """Accumulated statistics for a backup run."""
 
@@ -65,6 +84,13 @@ class BackupStats:
     uploaded_files: list[UploadFile] = field(default_factory=list)
     error_files: list[ErrorFile] = field(default_factory=list)
     excluded_directories: list[str] = field(default_factory=list)
+    prune_enabled: bool = False
+    files_pruned: int = 0
+    files_prune_failed: int = 0
+    bytes_pruned: int = 0
+    prune_skipped_reason: str = ""
+    pruned_files: list[PrunedFile] = field(default_factory=list)
+    prune_error_files: list[PruneError] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -129,6 +155,29 @@ def generate_report(stats: BackupStats) -> dict[str, object]:
         "drive_parent_folder_id": stats.drive_parent_folder_id,
         "drive_folder_id": stats.drive_folder_id,
         "drive_folder_url": stats.drive_folder_url,
+        "prune_enabled": stats.prune_enabled,
+        "files_pruned": stats.files_pruned,
+        "files_prune_failed": stats.files_prune_failed,
+        "total_bytes_pruned": stats.bytes_pruned,
+        "total_size_pruned_human": human_size(stats.bytes_pruned),
+        "prune_skipped_reason": stats.prune_skipped_reason,
+        "pruned_files": [
+            {
+                "relative_path": pf.relative_path,
+                "drive_file_id": pf.drive_file_id,
+                "size_bytes": pf.size_bytes,
+                "size_human": pf.size_human,
+            }
+            for pf in stats.pruned_files
+        ],
+        "prune_error_files": [
+            {
+                "relative_path": pe.relative_path,
+                "drive_file_id": pe.drive_file_id,
+                "error": pe.error,
+            }
+            for pe in stats.prune_error_files
+        ],
         "skipped_files": [
             {
                 "path": sf.path,

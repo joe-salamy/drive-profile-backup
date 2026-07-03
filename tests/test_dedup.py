@@ -57,6 +57,24 @@ class TestManifest:
             manifest.save(path)
             assert os.path.exists(path)
 
+    def test_remove_entry(self) -> None:
+        manifest = Manifest()
+        manifest.set(
+            relative_path="old/file.txt",
+            md5="abc",
+            size=10,
+            mtime=1.0,
+            drive_file_id="drive_old",
+            drive_parent_id="parent",
+        )
+
+        removed = manifest.remove("old/file.txt")
+
+        assert removed is not None
+        assert removed.drive_file_id == "drive_old"
+        assert manifest.get("old/file.txt") is None
+        assert manifest.remove("missing.txt") is None
+
 
 class TestNeedsUpload:
     def _make_file_entry(self, **kwargs: Any) -> FileEntry:

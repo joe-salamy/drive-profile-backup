@@ -9,6 +9,8 @@ import tempfile
 from drive_backup.report import (
     BackupStats,
     ErrorFile,
+    PruneError,
+    PrunedFile,
     SkippedFile,
     generate_report,
     save_report,
@@ -70,6 +72,11 @@ class TestGenerateReport:
             bytes_total_eligible=8192,
             start_time=0,
             end_time=10,
+            prune_enabled=True,
+            files_pruned=2,
+            files_prune_failed=1,
+            bytes_pruned=2048,
+            prune_skipped_reason="",
         )
         report = generate_report(stats)
         assert report["backup_root"] == "C:\\Users\\test"
@@ -79,6 +86,14 @@ class TestGenerateReport:
         assert report["files_uploaded"] == 10
         assert report["total_files_eligible"] == 90
         assert report["total_bytes_uploaded"] == 1024
+        assert report["prune_enabled"] is True
+        assert report["files_pruned"] == 2
+        assert report["files_prune_failed"] == 1
+        assert report["total_bytes_pruned"] == 2048
+        assert report["total_size_pruned_human"] == "2.0 KB"
+        assert report["prune_skipped_reason"] == ""
+        assert report["pruned_files"] == []
+        assert report["prune_error_files"] == []
 
     def test_report_includes_skipped_files(self) -> None:
         stats = BackupStats(
@@ -112,6 +127,35 @@ class TestGenerateReport:
         assert len(report["error_files"]) == 1  # type: ignore[arg-type]
         assert report["error_files"][0]["error"] == "Permission denied"  # type: ignore[index]
 
+    def test_report_includes_pruned_files(self) -> None:
+        stats = BackupStats(
+            pruned_files=[
+                PrunedFile(
+                    relative_path="old/file.txt",
+                    drive_file_id="drive_old",
+                    size_bytes=1024,
+                    size_human="1.0 KB",
+                )
+            ],
+        )
+        report = generate_report(stats)
+        assert len(report["pruned_files"]) == 1  # type: ignore[arg-type]
+        assert report["pruned_files"][0]["drive_file_id"] == "drive_old"  # type: ignore[index]
+
+    def test_report_includes_prune_errors(self) -> None:
+        stats = BackupStats(
+            prune_error_files=[
+                PruneError(
+                    relative_path="old/file.txt",
+                    drive_file_id="drive_old",
+                    error="not found",
+                )
+            ],
+        )
+        report = generate_report(stats)
+        assert len(report["prune_error_files"]) == 1  # type: ignore[arg-type]
+        assert report["prune_error_files"][0]["error"] == "not found"  # type: ignore[index]
+
 
 class TestSaveReport:
     def test_saves_valid_json(self) -> None:
@@ -128,3 +172,5 @@ class TestSaveReport:
 
         assert loaded["duration_seconds"] == 1.0
         assert isinstance(loaded["skipped_files"], list)
+        assert isinstance(loaded["pruned_files"], list)
+        assert isinstance(loaded["prune_error_files"], list)

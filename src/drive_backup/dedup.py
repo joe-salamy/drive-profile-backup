@@ -81,6 +81,10 @@ class Manifest:
         """Look up a file by its relative path."""
         return self.entries.get(relative_path)
 
+    def remove(self, relative_path: str) -> ManifestEntry | None:
+        """Remove and return a manifest entry by its relative path."""
+        return self.entries.pop(relative_path, None)
+
     def set(
         self,
         relative_path: str,

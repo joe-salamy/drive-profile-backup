@@ -174,6 +174,10 @@ class DriveAPI:
             lambda: self._do_update(file_id, media, resumable)
         )
 
+    def trash_file(self, file_id: str) -> dict[str, Any]:
+        """Move a Drive file to trash. Returns updated file metadata."""
+        return self._execute_with_retry(lambda: self._do_trash_file(file_id))
+
     def _do_upload(
         self, metadata: dict[str, Any], media: Any, resumable: bool
     ) -> dict[str, Any]:
@@ -197,6 +201,16 @@ class DriveAPI:
         )
         if resumable:
             return self._resumable_execute(request)
+        result: dict[str, Any] = request.execute()
+        return result
+
+    def _do_trash_file(self, file_id: str) -> dict[str, Any]:
+        self._rate_limiter.wait()
+        request = self.service.files().update(
+            fileId=file_id,
+            body={"trashed": True},
+            fields="id, name, trashed",
+        )
         result: dict[str, Any] = request.execute()
         return result
 

@@ -33,7 +33,16 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Ignore manifest, re-upload everything",
     )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="Move Drive files missing locally to trash and remove them from the manifest",
+    )
     args = parser.parse_args(argv)
+    if args.full and args.prune:
+        parser.error(
+            "--prune cannot be combined with --full because prune needs the existing manifest"
+        )
 
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -75,11 +84,17 @@ def main(argv: list[str] | None = None) -> None:
     console.print(f"[bold]Backup root:[/] {config.backup_root}")
     console.print(f"[bold]Profile:[/] {config.profile_name}")
 
-    if args.dry_run:
+    if args.dry_run and args.prune:
+        console.print("[yellow]DRY RUN - no files will be uploaded or pruned[/]")
+    elif args.dry_run:
         console.print("[yellow]DRY RUN - no files will be uploaded[/]")
+    elif args.prune:
+        console.print("[yellow]PRUNE - stale Drive files will be moved to trash[/]")
 
     # Create engine
-    engine = BackupEngine(config, dry_run=args.dry_run, full=args.full)
+    engine = BackupEngine(
+        config, dry_run=args.dry_run, full=args.full, prune=args.prune
+    )
 
     # Progress tracking
     progress = Progress(
@@ -113,10 +128,12 @@ def main(argv: list[str] | None = None) -> None:
 
     # Print summary
     console.print()
-    _print_summary(console, report)
+    _print_summary(console, report, verbose=args.verbose)
 
 
-def _print_summary(console: Console, report: dict[str, Any]) -> None:
+def _print_summary(
+    console: Console, report: dict[str, Any], *, verbose: bool = False
+) -> None:
     """Print a formatted summary table."""
     from rich.table import Table
 
@@ -145,6 +162,16 @@ def _print_summary(console: Console, report: dict[str, Any]) -> None:
     if report.get("drive_folder_url"):
         table.add_row("Drive folder", report["drive_folder_url"])
 
+    if report.get("prune_enabled") or report.get("files_pruned", 0):
+        table.add_row(
+            "Files to prune" if report["dry_run"] else "Files pruned",
+            str(report.get("files_pruned", 0)),
+        )
+        table.add_row(
+            "Size to prune" if report["dry_run"] else "Size pruned",
+            report.get("total_size_pruned_human", "0.0 B"),
+        )
+        table.add_row("Prune failures", str(report.get("files_prune_failed", 0)))
     console.print(table)
 
     # Show top uploaded (or to-be-uploaded) files by size
@@ -173,6 +200,38 @@ def _print_summary(console: Console, report: dict[str, Any]) -> None:
         for row in breakdown:
             bd_table.add_row(row["extension"], str(row["count"]), row["size_human"])
         console.print(bd_table)
+
+    pruned_files = report.get("pruned_files", [])
+    if pruned_files:
+        if verbose:
+            title = "Files to prune:" if report["dry_run"] else "Files pruned:"
+            rows = sorted(pruned_files, key=lambda f: f["relative_path"])
+        else:
+            title = (
+                "Top 10 biggest files to prune:"
+                if report["dry_run"]
+                else "Top 10 biggest files pruned:"
+            )
+            rows = sorted(pruned_files, key=lambda f: f["size_bytes"], reverse=True)[
+                :10
+            ]
+        console.print(f"\n[bold]{title}[/]")
+        prune_table = Table(show_header=True, header_style="dim")
+        prune_table.add_column("File", max_width=60)
+        prune_table.add_column("Size", justify="right")
+        prune_table.add_column("Drive ID")
+        for pf in rows:
+            prune_table.add_row(
+                pf["relative_path"], pf["size_human"], pf["drive_file_id"]
+            )
+        console.print(prune_table)
+
+    if report.get("prune_skipped_reason"):
+        console.print(f"\n[yellow]{report['prune_skipped_reason']}[/]")
+
+    prune_error_files = report.get("prune_error_files", [])
+    if prune_error_files:
+        console.print(f"\n[red]{len(prune_error_files)} prune operations failed.[/]")
 
     errors = report.get("error_files", [])
     if errors:

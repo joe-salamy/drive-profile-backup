@@ -80,3 +80,21 @@ class TestDriveAPI:
         )
         with pytest.raises(FileNotFoundError, match="Credentials file not found"):
             api.authenticate()
+
+    def test_trash_file_moves_file_to_trash(self) -> None:
+        api = DriveAPI(credentials_path="creds.json", token_path="token.json")
+        mock_service = MagicMock()
+        api._service = mock_service
+        api._rate_limiter = MagicMock()
+        expected = {"id": "file_123", "name": "stale.txt", "trashed": True}
+        mock_service.files.return_value.update.return_value.execute.return_value = (
+            expected
+        )
+
+        result = api.trash_file("file_123")
+
+        assert result == expected
+        mock_service.files().update.assert_called_once_with(
+            fileId="file_123", body={"trashed": True}, fields="id, name, trashed"
+        )
+        api._rate_limiter.wait.assert_called_once()
