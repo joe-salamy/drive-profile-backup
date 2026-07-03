@@ -67,6 +67,70 @@ class TestScanner:
             assert "venv/lib/something.py" not in paths
             assert "__pycache__/cached.pyc" not in paths
 
+    def test_default_generated_directories_are_pruned(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_tree(
+                tmp,
+                {
+                    "src/app.py": "print('kept')",
+                    "dist/bundle.js": "generated",
+                    "build/output.js": "generated",
+                    ".omp/state.json": "scaffolding",
+                    "demo.egg-info/PKG-INFO": "packaging metadata",
+                    "__pycache__/cached.pyc": "bytecode",
+                    ".cache/tool/index": "tool cache",
+                    "cache/archive.bin": "generic cache",
+                    ".npm/_cacache/index-v5/entry": "package cache",
+                    ".hypothesis/examples/demo": "property-test cache",
+                    ".turbo/run.json": "js task cache",
+                },
+            )
+            config = Config(profile_name="laptop-a", backup_root=tmp)
+
+            entries = list(scan(config))
+
+            paths = {e.relative_path for e in entries}
+            assert paths == {"src/app.py"}
+            assert all(not e.is_skipped for e in entries)
+
+    def test_default_generated_file_patterns_are_marked_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_tree(
+                tmp,
+                {
+                    "src/main.ts": "console.log('kept')",
+                    "frontend.tsbuildinfo": "generated",
+                    "module.pyc": "bytecode",
+                    "module.pyo": "optimized bytecode",
+                    ".coverage": "coverage database",
+                    ".coverage.integration": "coverage shard",
+                    "bundle.cache": "generic cache file",
+                    ".eslintcache": "linter cache",
+                    ".dmypy.json": "mypy daemon cache",
+                },
+            )
+            config = Config(profile_name="laptop-a", backup_root=tmp)
+
+            entries = list(scan(config))
+
+            kept_paths = {e.relative_path for e in entries if not e.is_skipped}
+            skipped_by_pattern = {
+                e.relative_path
+                for e in entries
+                if e.is_skipped and e.skip_reason == "excluded_by_pattern"
+            }
+            assert kept_paths == {"src/main.ts"}
+            assert skipped_by_pattern == {
+                "frontend.tsbuildinfo",
+                "module.pyc",
+                "module.pyo",
+                ".coverage",
+                ".coverage.integration",
+                "bundle.cache",
+                ".eslintcache",
+                ".dmypy.json",
+            }
+
     def test_excludes_file_patterns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(
