@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Worktree"
+  short_description: "Audit a worktree branch against main, load relevant skills, fix issues in that worktree only, and verify."
+  default_prompt: "Use this skill in the current implementation worktree: audit the branch diff against main using the provided implementation summary as context, load relevant project skills, fix all confirmed issues only in this worktree, verify, commit audit fixes if any, and report the result."

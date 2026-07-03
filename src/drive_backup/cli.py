@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from rich.console import Console
 
-    from drive_backup.config import Config
     from drive_backup.scanner import FileEntry
 
 
@@ -93,7 +92,6 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     scan_task = None
-    total_files = _count_scan_entries(config)
 
     def progress_callback(file: FileEntry, action: str) -> None:
         if scan_task is not None:
@@ -109,20 +107,13 @@ def main(argv: list[str] | None = None) -> None:
     with progress:
         scan_task = progress.add_task(
             "Backing up..." if not args.dry_run else "Scanning (dry run)...",
-            total=total_files,
+            total=None,
         )
         report = engine.run(progress_callback=progress_callback)
 
     # Print summary
     console.print()
     _print_summary(console, report)
-
-
-def _count_scan_entries(config: Config) -> int:
-    """Return the number of files the backup engine will process."""
-    from drive_backup.scanner import scan
-
-    return sum(1 for _ in scan(config))
 
 
 def _print_summary(console: Console, report: dict[str, Any]) -> None:

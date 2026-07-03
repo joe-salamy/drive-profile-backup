@@ -1,0 +1,59 @@
+# Dependency directories
+node_modules/
+bower_components/
+vendor/
+
+# Python environments and caches
+.venv/
+venv/
+env/
+ENV/
+.tox/
+.nox/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*$py.class
+
+# Build output and generated site/app folders
+dist/
+build/
+out/
+target/
+coverage/
+htmlcov/
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.vercel/
+.netlify/
+.cache/
+.parcel-cache/
+
+# Package-manager and tool caches
+.pnpm-store/
+.yarn/
+.yarn-cache/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Generated/minified assets
+*.min.js
+*.min.css
+*.bundle.js
+*.bundle.css
+
+# Lockfiles and generated dependency metadata
+package-lock.json
+npm-shrinkwrap.json
+pnpm-lock.yaml
+yarn.lock
+Pipfile.lock
+poetry.lock
+uv.lock
+Cargo.lock
