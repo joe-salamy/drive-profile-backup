@@ -1,0 +1,14 @@
+{
+  "audit_head_before": "5979fe332dccf8d59326920de366e5e49899e438",
+  "base": "main",
+  "completed_stage": "cleanup_complete",
+  "feature_branch": "feature/plan",
+  "feature_worktree": "C:\\Users\\joesa\\Code\\drive-profile-backup-plan",
+  "integration_branch": "integration/plan-20260703-105340",
+  "integration_worktree": "C:\\Users\\joesa\\Code\\drive-profile-backup-integrate-plan-20260703-105340",
+  "merge_mode": "squash",
+  "plan_path": "C:\\Users\\joesa\\Code\\drive-profile-backup-plan\\.omp\\worktree-flow\\20260703-104036-drive-prune-plan\\plan.md",
+  "plan_title": "plan",
+  "run_id": "20260703-104036-drive-prune-plan",
+  "slug": "plan"
+}
