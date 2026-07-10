@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -23,6 +24,11 @@ MAX_LOG_OUTPUT_CHARS = 20_000
 DEFAULT_BASE_CANDIDATES = ("main", "master")
 WORKTREE_FLOW_DIRNAME = "worktree-flow"
 RUN_ID_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
+USAGE_EVENTS_FILENAME = "usage-events.jsonl"
+USAGE_SUMMARY_FILENAME = "usage-summary.json"
+USAGE_SOURCES_FILENAME = "usage-sources.json"
+SESSION_SCAN_MAX_FILES = 2000
+
 
 
 def decode_subprocess_output(value: object) -> str:
@@ -129,6 +135,38 @@ class CommandResult:
     finished_at: str = ""
     duration_ms: int | None = None
     timed_out: bool = False
+
+
+@dataclass(frozen=True)
+class SessionSnapshot:
+    files: dict[str, int]
+
+
+@dataclass(frozen=True)
+class UsageSource:
+    source_id: str
+    session_id: str | None
+    file_name: str
+    path_hash: str
+    records_read: int
+    event_counts: dict[str, int]
+    record_ids: list[str]
+
+
+@dataclass(frozen=True)
+class UsageTotals:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+    cost_input: float = 0.0
+    cost_output: float = 0.0
+    cost_cache_read: float = 0.0
+    cost_cache_write: float = 0.0
+    cost_total: float = 0.0
+
 
 
 class CommandRunner:
@@ -296,6 +334,12 @@ def write_text(path: Path, text: str) -> None:
 
 
 @dataclass(frozen=True)
+class GitWorktree:
+    path: Path
+    branch: str | None
+
+
+@dataclass(frozen=True)
 class Names:
     slug: str
     branch: str
@@ -457,6 +501,15 @@ class HarnessWorktreeFlow:
     def workflow_state_file(self, worktree: Path) -> Path:
         return worktree / self.handoff_dir / WORKFLOW_STATE_FILENAME
 
+    def read_workflow_state_file(self, path: Path) -> WorkflowState | None:
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return WorkflowState(**data)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise FlowError(f"Invalid workflow state file: {path}") from exc
+
     def save_workflow_state_file(self, path: Path, state: WorkflowState) -> None:
         self.ensure_dir(path.parent)
         self._last_state = state
@@ -471,16 +524,9 @@ class HarnessWorktreeFlow:
         self.save_workflow_state_file(self.workflow_state_file(target_worktree), state)
 
     def load_workflow_state(self, worktree: Path) -> WorkflowState | None:
-        path = self.workflow_state_file(worktree)
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            state = WorkflowState(**data)
-            self._last_state = state
-            return state
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise FlowError(f"Invalid workflow state file: {path}") from exc
+        state = self.read_workflow_state_file(self.workflow_state_file(worktree))
+        self._last_state = state
+        return state
 
     def resume_command_args(self) -> list[str] | None:
         state = self._last_state
@@ -589,6 +635,80 @@ class HarnessWorktreeFlow:
         result = self.runner.run(["git", "rev-parse", "--show-toplevel"], start)
         root = result.stdout.strip()
         return Path(root).resolve() if root else start
+
+    def git_worktrees(self, repo: Path) -> list[GitWorktree]:
+        result = self.runner.run(["git", "worktree", "list", "--porcelain"], repo)
+        entries: list[GitWorktree] = []
+        path: Path | None = None
+        branch: str | None = None
+
+        def add_entry() -> None:
+            nonlocal path, branch
+            if path is not None:
+                entries.append(GitWorktree(path.resolve(), branch))
+            path = None
+            branch = None
+
+        for line in result.stdout.splitlines():
+            if not line:
+                add_entry()
+                continue
+            key, _, value = line.partition(" ")
+            if key == "worktree":
+                add_entry()
+                path = Path(value).expanduser()
+            elif key == "branch":
+                branch = value.removeprefix("refs/heads/")
+        add_entry()
+        return entries
+
+    def matching_resume_worktrees(
+        self, worktrees: Sequence[GitWorktree], run_id: str
+    ) -> list[Path]:
+        matches: list[Path] = []
+        for worktree in worktrees:
+            state = self.read_workflow_state_file(
+                self.workflow_state_file(worktree.path)
+            )
+            if state is not None and state.run_id == run_id:
+                matches.append(worktree.path)
+        return matches
+
+    def infer_resume_worktree(self, repo: Path, plan: Path) -> Path:
+        worktrees = self.git_worktrees(repo)
+        run_id = self.run_id_from_plan(repo, plan)
+        if run_id is not None:
+            matches = self.matching_resume_worktrees(worktrees, run_id)
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                raise FlowError(
+                    f"Multiple worktrees have workflow state for run id {run_id}; "
+                    "pass --worktree explicitly."
+                )
+
+        slug = derive_slug(plan)
+        expected = (repo.parent / f"{repo.name}-{slug}").resolve()
+        expected_matches = [
+            worktree.path for worktree in worktrees if worktree.path == expected
+        ]
+        if len(expected_matches) == 1:
+            return expected_matches[0]
+
+        branch = f"feature/{slug}"
+        branch_matches = [
+            worktree.path for worktree in worktrees if worktree.branch == branch
+        ]
+        if len(branch_matches) == 1:
+            return branch_matches[0]
+        if len(branch_matches) > 1:
+            raise FlowError(
+                f"Multiple worktrees use branch {branch}; pass --worktree explicitly."
+            )
+
+        raise FlowError(
+            "Could not infer the feature worktree for --resume; pass --worktree."
+        )
 
     def unique_feature_names(
         self, repo: Path, slug: str, run_id: str | None = None
@@ -905,6 +1025,789 @@ class HarnessWorktreeFlow:
             self.print_checkpoint("skip", "Audit", (("summary", audit_summary),))
         return state
 
+    def usage_events_file(self, worktree: Path) -> Path:
+        return worktree / self.handoff_dir / USAGE_EVENTS_FILENAME
+
+    def usage_summary_file(self, worktree: Path) -> Path:
+        return worktree / self.handoff_dir / USAGE_SUMMARY_FILENAME
+
+    def usage_sources_file(self, worktree: Path) -> Path:
+        return worktree / self.handoff_dir / USAGE_SOURCES_FILENAME
+
+    @staticmethod
+    def wsl_windows_home_from_repo(repo: Path) -> Path | None:
+        match = re.match(r"^/mnt/([A-Za-z])/Users/([^/]+)(?:/|$)", repo.as_posix())
+        if not match:
+            return None
+        drive, user = match.groups()
+        return Path("/mnt") / drive.lower() / "Users" / user
+
+    def omp_sessions_roots(self, repo: Path) -> list[Path]:
+        roots = [Path.home() / ".omp" / "agent" / "sessions"]
+        wsl_home = self.wsl_windows_home_from_repo(repo.resolve())
+        if wsl_home is not None:
+            roots.append(wsl_home / ".omp" / "agent" / "sessions")
+        return [root for root in dict.fromkeys(roots) if root.exists()]
+
+    def snapshot_omp_sessions(self, repo: Path) -> SessionSnapshot:
+        files = self.newest_session_files(repo)
+        return SessionSnapshot(
+            {str(path.resolve()): self.safe_mtime_ns(path) for path in files}
+        )
+
+    def changed_session_files(self, repo: Path, snapshot: SessionSnapshot) -> list[Path]:
+        changed: list[tuple[int, Path]] = []
+        for path in self.newest_session_files(repo):
+            try:
+                resolved = str(path.resolve())
+            except OSError:
+                continue
+            mtime_ns = self.safe_mtime_ns(path)
+            previous = snapshot.files.get(resolved)
+            if previous is None or mtime_ns > previous:
+                changed.append((mtime_ns, path))
+        changed.sort(key=lambda item: item[0], reverse=True)
+        return [path for _mtime, path in changed[:SESSION_SCAN_MAX_FILES]]
+
+    def newest_session_files(self, repo: Path) -> list[Path]:
+        files: list[tuple[int, Path]] = []
+        for root in self.omp_sessions_roots(repo):
+            try:
+                candidates = root.rglob("*.jsonl")
+                for path in candidates:
+                    if not path.is_file():
+                        continue
+                    files.append((self.safe_mtime_ns(path), path))
+            except OSError:
+                continue
+        files.sort(key=lambda item: item[0], reverse=True)
+        return [path for _mtime, path in files[:SESSION_SCAN_MAX_FILES]]
+
+    @staticmethod
+    def safe_mtime_ns(path: Path) -> int:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return 0
+
+    def session_cwd(self, session_file: Path) -> str | None:
+        for record in self.read_jsonl_records(session_file):
+            if record.get("type") not in {"session", "session_init"}:
+                continue
+            cwd = self.string_at(record, ("cwd",))
+            if cwd is None:
+                cwd = self.string_at(record, ("data", "cwd"))
+            if cwd is not None:
+                return cwd
+        return None
+
+    def path_matches_worktree(self, raw_cwd: str, worktree: Path) -> bool:
+        raw = raw_cwd.replace("\\", "/").rstrip("/")
+        candidates = {raw}
+        try:
+            candidates.add(Path(raw_cwd).expanduser().resolve().as_posix().rstrip("/"))
+        except (OSError, RuntimeError):
+            pass
+        try:
+            resolved_worktree = worktree.resolve()
+        except (OSError, RuntimeError):
+            resolved_worktree = worktree
+        worktree_strings = {
+            worktree.as_posix().rstrip("/"),
+            resolved_worktree.as_posix().rstrip("/"),
+        }
+        windows_worktree = wsl_drive_mount_to_windows_path(resolved_worktree)
+        if windows_worktree is not None:
+            worktree_strings.add(windows_worktree.replace("\\", "/").rstrip("/"))
+        normalized_candidates = {self.casefold_path_text(value) for value in candidates}
+        normalized_worktrees = {
+            self.casefold_path_text(value) for value in worktree_strings
+        }
+        return bool(normalized_candidates & normalized_worktrees)
+
+    @staticmethod
+    def casefold_path_text(value: str) -> str:
+        return value.lower() if re.match(r"^[A-Za-z]:/", value) else value
+
+    def collect_phase_usage(
+        self,
+        repo: Path,
+        worktree: Path,
+        phase: str,
+        snapshot: SessionSnapshot,
+        command_result: CommandResult,
+    ) -> dict[str, object]:
+        event = self.base_usage_event(phase, worktree, command_result)
+        if not self.is_omp_harness():
+            event["status"] = "unavailable"
+            event["reason"] = "non_omp_harness"
+            return event
+
+        selected = [
+            path
+            for path in self.changed_session_files(repo, snapshot)
+            if (cwd := self.session_cwd(path)) is not None
+            and self.path_matches_worktree(cwd, worktree)
+        ]
+        if not selected:
+            event["status"] = "unavailable"
+            event["reason"] = "no_matching_session_files"
+            return event
+
+        aggregate = self.empty_usage_aggregate()
+        sources: list[dict[str, object]] = []
+        for index, session_file in enumerate(selected, start=1):
+            source_id = f"session-{index}"
+            source_data = self.collect_session_usage(session_file, source_id)
+            self.merge_usage_aggregate(aggregate, source_data["aggregate"])
+            sources.append(asdict(source_data["source"]))
+
+        event.update(
+            {
+                "status": "collected",
+                "totals": self.compact_mapping(aggregate["totals"]),
+                "nested_response_usage": self.compact_mapping(
+                    aggregate["nested_response_usage"]
+                ),
+                "models": aggregate["models"],
+                "tools": aggregate["tools"],
+                "context": self.compact_mapping(aggregate["context"]),
+                "timings": self.compact_mapping(aggregate["timings"]),
+                "event_counts": aggregate["event_counts"],
+                "sources": sources,
+            }
+        )
+        return event
+
+    def base_usage_event(
+        self, phase: str, worktree: Path, command_result: CommandResult
+    ) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "timestamp": now_iso(),
+            "run_id": self.current_run_id(worktree),
+            "harness": self.config.harness,
+            "harness_dir": self.harness_dir.as_posix(),
+            "phase": phase,
+            "status": "collected",
+            "command_returncode": command_result.returncode,
+            "command_timed_out": command_result.timed_out,
+            "command_duration_ms": command_result.duration_ms,
+            "command_started_at": command_result.started_at,
+            "command_finished_at": command_result.finished_at,
+            "totals": {},
+            "nested_response_usage": {},
+            "models": {},
+            "tools": {},
+            "context": {},
+            "timings": {},
+            "event_counts": {},
+            "sources": [],
+        }
+
+    def current_run_id(self, worktree: Path) -> str | None:
+        if self._last_state is not None:
+            return self._last_state.run_id
+        log_file = self.workflow_log_file(worktree)
+        if not log_file.exists():
+            return None
+        for line in log_file.read_text(encoding="utf-8").splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            run_id = record.get("run_id")
+            if isinstance(run_id, str) and run_id:
+                return run_id
+        return None
+
+    def collect_session_usage(
+        self, session_file: Path, source_id: str
+    ) -> dict[str, object]:
+        aggregate = self.empty_usage_aggregate()
+        event_counts: dict[str, int] = {}
+        record_ids: list[str] = []
+        session_id: str | None = None
+        records_read = 0
+        for records_read, record in enumerate(
+            self.read_jsonl_records(session_file), start=1
+        ):
+            contributed = False
+            session_id = session_id or self.session_id_from_record(record)
+            for key in ("type", "customType"):
+                value = record.get(key)
+                if isinstance(value, str) and value:
+                    event_counts[value] = event_counts.get(value, 0) + 1
+                    aggregate["event_counts"][value] = (
+                        aggregate["event_counts"].get(value, 0) + 1
+                    )
+
+            if self.collect_config_record(record, aggregate):
+                contributed = True
+            if self.collect_message_record(record, aggregate):
+                contributed = True
+            if self.collect_tool_start_record(record, aggregate):
+                contributed = True
+
+            if contributed and len(record_ids) < 50:
+                record_id = self.safe_record_id(record)
+                if record_id is not None:
+                    record_ids.append(record_id)
+
+        path_hash = hashlib.sha256(str(session_file.resolve()).encode()).hexdigest()[:16]
+        return {
+            "aggregate": aggregate,
+            "source": UsageSource(
+                source_id=source_id,
+                session_id=session_id,
+                file_name=session_file.name,
+                path_hash=path_hash,
+                records_read=records_read,
+                event_counts=event_counts,
+                record_ids=record_ids,
+            ),
+        }
+
+    def read_jsonl_records(self, path: Path) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return records
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+        return records
+
+    @staticmethod
+    def empty_usage_aggregate() -> dict[str, dict[str, object]]:
+        return {
+            "totals": asdict(UsageTotals()),
+            "nested_response_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+            "models": {},
+            "tools": {},
+            "context": {
+                "max_prompt_tokens": 0,
+                "last_prompt_tokens": 0,
+                "max_non_message_tokens": 0,
+                "last_non_message_tokens": 0,
+            },
+            "timings": {
+                "message_duration_ms": 0,
+                "message_ttft_ms": 0,
+                "message_count": 0,
+            },
+            "event_counts": {},
+        }
+
+    def collect_config_record(
+        self, record: dict[str, object], aggregate: dict[str, dict[str, object]]
+    ) -> bool:
+        contributed = False
+        model = self.string_at(record, ("model_change", "model")) or self.string_at(
+            record, ("data", "model")
+        )
+        if record.get("type") == "model_change" and model is not None:
+            self.increment_nested(aggregate["models"], model, "config_selections", 1)
+            contributed = True
+        thinking_level = self.string_at(
+            record, ("thinking_level_change", "thinkingLevel")
+        ) or self.string_at(record, ("data", "thinkingLevel"))
+        if record.get("type") == "thinking_level_change" and thinking_level is not None:
+            self.increment_nested(
+                aggregate["models"], thinking_level, "thinking_level_selections", 1
+            )
+            contributed = True
+        service_tier = self.string_at(
+            record, ("service_tier_change", "serviceTier")
+        ) or self.string_at(record, ("data", "serviceTier"))
+        if record.get("type") == "service_tier_change" and service_tier is not None:
+            self.increment_nested(
+                aggregate["models"], service_tier, "service_tier_selections", 1
+            )
+            contributed = True
+        return contributed
+
+    def collect_message_record(
+        self, record: dict[str, object], aggregate: dict[str, dict[str, object]]
+    ) -> bool:
+        message = record.get("message")
+        if not isinstance(message, dict):
+            return False
+        contributed = False
+        if self.collect_assistant_usage(message, aggregate):
+            contributed = True
+        if self.collect_context_snapshot(message, aggregate):
+            contributed = True
+        if self.collect_nested_response_usage(message, aggregate):
+            contributed = True
+        if self.collect_tool_result_usage(message, aggregate):
+            contributed = True
+        return contributed
+
+    def collect_assistant_usage(
+        self, message: dict[str, object], aggregate: dict[str, dict[str, object]]
+    ) -> bool:
+        if message.get("role") != "assistant":
+            return False
+        contributed = False
+        usage = message.get("usage")
+        if isinstance(usage, dict):
+            mappings = {
+                "input": "input_tokens",
+                "output": "output_tokens",
+                "cacheRead": "cache_read_tokens",
+                "cacheWrite": "cache_write_tokens",
+                "reasoningTokens": "reasoning_tokens",
+                "totalTokens": "total_tokens",
+            }
+            for source_key, dest_key in mappings.items():
+                value = self.numeric_at(usage, (source_key,))
+                if value is not None:
+                    aggregate["totals"][dest_key] += int(value)
+                    contributed = True
+            cost = usage.get("cost")
+            if isinstance(cost, dict):
+                cost_mappings = {
+                    "input": "cost_input",
+                    "output": "cost_output",
+                    "cacheRead": "cost_cache_read",
+                    "cacheWrite": "cost_cache_write",
+                    "total": "cost_total",
+                }
+                for source_key, dest_key in cost_mappings.items():
+                    value = self.numeric_at(cost, (source_key,))
+                    if value is not None:
+                        aggregate["totals"][dest_key] += float(value)
+                        contributed = True
+        model = self.string_at(message, ("model",))
+        if model is not None:
+            self.increment_nested(aggregate["models"], model, "assistant_messages", 1)
+            for key, dest in (
+                ("provider", "providers"),
+                ("api", "apis"),
+                ("stopReason", "stop_reasons"),
+            ):
+                value = self.string_at(message, (key,))
+                if value is not None:
+                    self.increment_nested(
+                        aggregate["models"][model].setdefault(dest, {}), value, "count", 1
+                    )
+            contributed = True
+        duration = self.numeric_at(message, ("duration",))
+        if duration is not None:
+            aggregate["timings"]["message_duration_ms"] += int(float(duration) * 1000)
+            aggregate["timings"]["message_count"] += 1
+            contributed = True
+        ttft = self.numeric_at(message, ("ttft",))
+        if ttft is not None:
+            aggregate["timings"]["message_ttft_ms"] += int(float(ttft) * 1000)
+            contributed = True
+        return contributed
+
+    def collect_context_snapshot(
+        self, message: dict[str, object], aggregate: dict[str, dict[str, object]]
+    ) -> bool:
+        snapshot = message.get("contextSnapshot")
+        if not isinstance(snapshot, dict):
+            return False
+        contributed = False
+        prompt_tokens = self.numeric_at(snapshot, ("promptTokens",))
+        if prompt_tokens is not None:
+            value = int(prompt_tokens)
+            aggregate["context"]["last_prompt_tokens"] = value
+            aggregate["context"]["max_prompt_tokens"] = max(
+                int(aggregate["context"]["max_prompt_tokens"]), value
+            )
+            contributed = True
+        non_message_tokens = self.numeric_at(snapshot, ("nonMessageTokens",))
+        if non_message_tokens is not None:
+            value = int(non_message_tokens)
+            aggregate["context"]["last_non_message_tokens"] = value
+            aggregate["context"]["max_non_message_tokens"] = max(
+                int(aggregate["context"]["max_non_message_tokens"]), value
+            )
+            contributed = True
+        return contributed
+
+    def collect_nested_response_usage(
+        self, message: dict[str, object], aggregate: dict[str, dict[str, object]]
+    ) -> bool:
+        usage = self.mapping_at(message, ("details", "response", "usage"))
+        if usage is None:
+            return False
+        mappings = {
+            "inputTokens": "input_tokens",
+            "outputTokens": "output_tokens",
+            "totalTokens": "total_tokens",
+        }
+        contributed = False
+        for source_key, dest_key in mappings.items():
+            value = self.numeric_at(usage, (source_key,))
+            if value is not None:
+                aggregate["nested_response_usage"][dest_key] += int(value)
+                contributed = True
+        return contributed
+
+    def collect_tool_start_record(
+        self, record: dict[str, object], aggregate: dict[str, dict[str, object]]
+    ) -> bool:
+        if record.get("customType") != "tool_execution_start":
+            return False
+        tool_name = self.string_at(record, ("data", "toolName"))
+        if tool_name is None:
+            return False
+        tool = self.tool_bucket(aggregate["tools"], tool_name)
+        tool["calls"] += 1
+        return True
+
+    def collect_tool_result_usage(
+        self, message: dict[str, object], aggregate: dict[str, dict[str, object]]
+    ) -> bool:
+        if message.get("role") != "toolResult":
+            return False
+        tool_name = self.string_at(message, ("toolName",))
+        if tool_name is None:
+            return False
+        tool = self.tool_bucket(aggregate["tools"], tool_name)
+        tool["results"] += 1
+        if message.get("isError") is True:
+            tool["errors"] += 1
+        details = message.get("details")
+        if isinstance(details, dict):
+            for source_key, dest_key in (
+                ("wallTimeMs", "wall_time_ms"),
+                ("exitCode", "exit_code_total"),
+                ("timeoutSeconds", "timeout_seconds"),
+                ("fileCount", "file_count"),
+                ("matchCount", "match_count"),
+            ):
+                value = self.numeric_at(details, (source_key,))
+                if value is not None:
+                    tool[dest_key] = tool.get(dest_key, 0) + int(value)
+            for source_key, dest_key in (
+                ("fileLimitReached", "file_limit_reached"),
+                ("resultLimitReached", "result_limit_reached"),
+            ):
+                if details.get(source_key) is True:
+                    tool[dest_key] = tool.get(dest_key, 0) + 1
+            for key, value in details.items():
+                if not isinstance(value, int | float) or isinstance(value, bool):
+                    continue
+                normalized = self.safe_metric_name(key)
+                if "trunc" in normalized and (
+                    "byte" in normalized or "line" in normalized
+                ):
+                    tool[normalized] = tool.get(normalized, 0) + int(value)
+        return True
+
+    @staticmethod
+    def tool_bucket(tools: dict[str, object], tool_name: str) -> dict[str, int]:
+        bucket = tools.setdefault(
+            tool_name, {"calls": 0, "results": 0, "errors": 0}
+        )
+        if not isinstance(bucket, dict):
+            raise FlowError(f"Invalid tool bucket for {tool_name}")
+        return bucket
+
+    @staticmethod
+    def safe_metric_name(value: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+        return normalized or "metric"
+
+    def merge_usage_aggregate(
+        self, target: dict[str, dict[str, object]], source: dict[str, dict[str, object]]
+    ) -> None:
+        for key in ("totals", "nested_response_usage", "timings", "event_counts"):
+            self.merge_numeric_map(target[key], source[key])
+        self.merge_context(target["context"], source["context"])
+        self.merge_models(target["models"], source["models"])
+        self.merge_tools(target["tools"], source["tools"])
+
+    def merge_context(self, target: dict[str, object], source: dict[str, object]) -> None:
+        for key in ("max_prompt_tokens", "max_non_message_tokens"):
+            target[key] = max(int(target.get(key, 0)), int(source.get(key, 0)))
+        for key in ("last_prompt_tokens", "last_non_message_tokens"):
+            value = int(source.get(key, 0))
+            if value:
+                target[key] = value
+
+    def merge_models(self, target: dict[str, object], source: dict[str, object]) -> None:
+        for model, source_stats in source.items():
+            if not isinstance(source_stats, dict):
+                continue
+            target_stats = target.setdefault(model, {})
+            if not isinstance(target_stats, dict):
+                continue
+            for key, value in source_stats.items():
+                if isinstance(value, int | float) and not isinstance(value, bool):
+                    target_stats[key] = target_stats.get(key, 0) + value
+                elif isinstance(value, dict):
+                    nested = target_stats.setdefault(key, {})
+                    if isinstance(nested, dict):
+                        for nested_key, nested_value in value.items():
+                            if isinstance(nested_value, dict):
+                                amount = nested_value.get("count", 0)
+                            else:
+                                amount = nested_value
+                            if isinstance(amount, int | float) and not isinstance(
+                                amount, bool
+                            ):
+                                current = nested.setdefault(nested_key, {"count": 0})
+                                if isinstance(current, dict):
+                                    current["count"] = current.get("count", 0) + amount
+
+    def merge_tools(self, target: dict[str, object], source: dict[str, object]) -> None:
+        for tool_name, source_stats in source.items():
+            if not isinstance(source_stats, dict):
+                continue
+            target_stats = self.tool_bucket(target, tool_name)
+            self.merge_numeric_map(target_stats, source_stats)
+
+    @staticmethod
+    def merge_numeric_map(target: dict[str, object], source: dict[str, object]) -> None:
+        for key, value in source.items():
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                target[key] = target.get(key, 0) + value
+
+    @staticmethod
+    def increment_nested(
+        target: dict[str, object], key: str, metric: str, amount: int
+    ) -> None:
+        bucket = target.setdefault(key, {})
+        if isinstance(bucket, dict):
+            bucket[metric] = bucket.get(metric, 0) + amount
+
+    @staticmethod
+    def numeric_at(data: dict[str, object], path: Sequence[str]) -> int | float | None:
+        value: object = data
+        for key in path:
+            if not isinstance(value, dict):
+                return None
+            value = value.get(key)
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        return value
+
+    @staticmethod
+    def string_at(data: dict[str, object], path: Sequence[str]) -> str | None:
+        value: object = data
+        for key in path:
+            if not isinstance(value, dict):
+                return None
+            value = value.get(key)
+        return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def mapping_at(
+        data: dict[str, object], path: Sequence[str]
+    ) -> dict[str, object] | None:
+        value: object = data
+        for key in path:
+            if not isinstance(value, dict):
+                return None
+            value = value.get(key)
+        return value if isinstance(value, dict) else None
+
+    @staticmethod
+    def session_id_from_record(record: dict[str, object]) -> str | None:
+        for key in ("session_id", "sessionId", "sessionID", "id"):
+            value = record.get(key)
+            if isinstance(value, str) and value:
+                return value
+        data = record.get("data")
+        if isinstance(data, dict):
+            for key in ("session_id", "sessionId", "sessionID", "id"):
+                value = data.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return None
+
+    @staticmethod
+    def safe_record_id(record: dict[str, object]) -> str | None:
+        for key in ("id", "messageId", "recordId"):
+            value = record.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+                return value
+        message = record.get("message")
+        if isinstance(message, dict):
+            value = message.get("id")
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+                return value
+        return None
+
+    @staticmethod
+    def compact_mapping(data: dict[str, object]) -> dict[str, object]:
+        compact: dict[str, object] = {}
+        for key, value in data.items():
+            if isinstance(value, float):
+                if value != 0.0:
+                    compact[key] = value
+            elif isinstance(value, int):
+                if value != 0:
+                    compact[key] = value
+            elif value:
+                compact[key] = value
+        return compact
+
+    def append_usage_event(self, worktree: Path, event: dict[str, object]) -> None:
+        path = self.usage_events_file(worktree)
+        if self.runner.dry_run:
+            print(f"+ write {path}")
+            return
+        ensure_dir(path.parent)
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(event, sort_keys=True, ensure_ascii=False) + "\n")
+
+    def rewrite_usage_summary(self, worktree: Path) -> None:
+        events = self.read_usage_events(worktree)
+        summary = self.build_usage_summary(events)
+        self.write_json_file(self.usage_summary_file(worktree), summary)
+
+    def rewrite_usage_sources(self, worktree: Path) -> None:
+        events = self.read_usage_events(worktree)
+        sources: list[dict[str, object]] = []
+        for event in events:
+            for source in event.get("sources", []):
+                if not isinstance(source, dict):
+                    continue
+                sources.append(source)
+        payload = {
+            "schema_version": 1,
+            "generated_at": now_iso(),
+            "run_id": self._last_state.run_id if self._last_state is not None else None,
+            "harness": self.config.harness,
+            "harness_dir": self.harness_dir.as_posix(),
+            "sources": sources,
+        }
+        self.write_json_file(self.usage_sources_file(worktree), payload)
+
+    def read_usage_events(self, worktree: Path) -> list[dict[str, object]]:
+        path = self.usage_events_file(worktree)
+        if not path.exists():
+            return []
+        return self.read_jsonl_records(path)
+
+    def build_usage_summary(
+        self, events: Sequence[dict[str, object]]
+    ) -> dict[str, object]:
+        phase_names = (
+            "implementation",
+            "audit",
+            "conflict_resolution",
+            "post_conflict_audit",
+        )
+        phases: dict[str, object] = {phase: {} for phase in phase_names}
+        totals: dict[str, object] = {}
+        nested_response_usage: dict[str, object] = {}
+        models: dict[str, object] = {}
+        tools: dict[str, object] = {}
+        path_hashes: set[str] = set()
+        run_id: str | None = None
+        for event in events:
+            if run_id is None and isinstance(event.get("run_id"), str):
+                run_id = event["run_id"]
+            phase = event.get("phase")
+            if not isinstance(phase, str):
+                continue
+            phase_summary = phases.setdefault(
+                phase,
+                {
+                    "runs": 0,
+                    "status_counts": {},
+                    "totals": {},
+                    "nested_response_usage": {},
+                    "models": {},
+                    "tools": {},
+                },
+            )
+            if not phase_summary:
+                phase_summary.update(
+                    {
+                        "runs": 0,
+                        "status_counts": {},
+                        "totals": {},
+                        "nested_response_usage": {},
+                        "models": {},
+                        "tools": {},
+                    }
+                )
+            phase_summary["runs"] += 1
+            status = event.get("status")
+            if isinstance(status, str):
+                self.increment_nested(
+                    phase_summary["status_counts"], status, "count", 1
+                )
+            event_totals = event.get("totals")
+            if isinstance(event_totals, dict):
+                self.merge_numeric_map(phase_summary["totals"], event_totals)
+                self.merge_numeric_map(totals, event_totals)
+            event_nested = event.get("nested_response_usage")
+            if isinstance(event_nested, dict):
+                self.merge_numeric_map(
+                    phase_summary["nested_response_usage"], event_nested
+                )
+                self.merge_numeric_map(nested_response_usage, event_nested)
+            event_models = event.get("models")
+            if isinstance(event_models, dict):
+                self.merge_models(phase_summary["models"], event_models)
+                self.merge_models(models, event_models)
+            event_tools = event.get("tools")
+            if isinstance(event_tools, dict):
+                self.merge_tools(phase_summary["tools"], event_tools)
+                self.merge_tools(tools, event_tools)
+            for source in event.get("sources", []):
+                if isinstance(source, dict) and isinstance(source.get("path_hash"), str):
+                    path_hashes.add(source["path_hash"])
+        for phase, phase_summary in list(phases.items()):
+            if not isinstance(phase_summary, dict) or not phase_summary:
+                continue
+            status_counts = phase_summary.get("status_counts")
+            if isinstance(status_counts, dict):
+                phase_summary["status_counts"] = {
+                    key: value.get("count", value) if isinstance(value, dict) else value
+                    for key, value in status_counts.items()
+                }
+            for key in ("totals", "nested_response_usage"):
+                value = phase_summary.get(key)
+                if isinstance(value, dict):
+                    phase_summary[key] = self.compact_mapping(value)
+        return {
+            "schema_version": 1,
+            "generated_at": now_iso(),
+            "run_id": run_id,
+            "harness": self.config.harness,
+            "harness_dir": self.harness_dir.as_posix(),
+            "phases": phases,
+            "totals": self.compact_mapping(totals),
+            "nested_response_usage": self.compact_mapping(nested_response_usage),
+            "models": models,
+            "tools": tools,
+            "sources": {"count": len(path_hashes), "path_hashes": sorted(path_hashes)},
+            "privacy": {
+                "prompt_text_logged": False,
+                "response_text_logged": False,
+                "tool_argument_values_logged": False,
+                "session_paths_logged": False,
+            },
+        }
+
+    def write_json_file(self, path: Path, payload: dict[str, object]) -> None:
+        if self.runner.dry_run:
+            print(f"+ write {path}")
+            return
+        self.write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
     def implementation_prompt(self, worktree: Path, plan_path: Path) -> str:
         return f"""Use the implement-worktree skill.
 
@@ -922,7 +1825,7 @@ Requirements:
     def run_implementation(self, worktree: Path, plan_path: Path) -> None:
         prompt = self.implementation_prompt(worktree, plan_path)
         output = worktree / self.handoff_dir / "implementation-final-response.md"
-        self.harness_exec(worktree, prompt, output)
+        self.harness_exec(worktree, prompt, output, phase="implementation")
 
     def audit_prompt(
         self, worktree: Path, plan_path: Path, *, post_conflict: bool
@@ -963,7 +1866,12 @@ Write `{summary.as_posix()}` before finishing.
                 else "audit-final-response.md"
             )
         )
-        self.harness_exec(worktree, prompt, output)
+        self.harness_exec(
+            worktree,
+            prompt,
+            output,
+            phase="post_conflict_audit" if post_conflict else "audit",
+        )
 
     def harness_sandbox_mode(self) -> str:
         if os.name == "nt":
@@ -1020,7 +1928,9 @@ Write `{summary.as_posix()}` before finishing.
         args.extend(["--output-last-message", str(output_file), "-"])
         return args
 
-    def harness_exec(self, cwd: Path, prompt: str, output_file: Path) -> None:
+    def harness_exec(
+        self, cwd: Path, prompt: str, output_file: Path, *, phase: str
+    ) -> None:
         self.ensure_dir(output_file.parent)
         prompt_file: Path | None = None
         input_text: str | None = prompt
@@ -1037,6 +1947,7 @@ Write `{summary.as_posix()}` before finishing.
             output_file=str(output_file),
             command=logged_command(args),
         )
+        session_snapshot = self.snapshot_omp_sessions(cwd)
         result = self.runner.run(args, cwd, check=False, input_text=input_text)
         if self.is_omp_harness():
             self.write_text(output_file, result.stdout)
@@ -1055,6 +1966,12 @@ Write `{summary.as_posix()}` before finishing.
             result,
             **output_fields,
         )
+        usage_event = self.collect_phase_usage(
+            cwd, cwd, phase, session_snapshot, result
+        )
+        self.append_usage_event(cwd, usage_event)
+        self.rewrite_usage_summary(cwd)
+        self.rewrite_usage_sources(cwd)
         if result.returncode != 0 or result.timed_out:
             self.log_command_result(
                 "harness_exec_failure",
@@ -1510,6 +2427,7 @@ Write `{summary.as_posix()}` before finishing.
             integration_worktree
             / self.handoff_dir
             / "conflict-resolution-final-response.md",
+            phase="conflict_resolution",
         )
         self.require_file(
             integration_worktree / self.handoff_dir / "conflict-resolution-summary.md"
@@ -2128,7 +3046,10 @@ def build_parser(
     )
     parser.add_argument(
         "--worktree",
-        help="Existing feature worktree to resume; required with --resume.",
+        help=(
+            "Existing feature worktree to resume. Defaults to the saved plan's "
+            "existing worktree with --resume."
+        ),
     )
     parser.add_argument(
         "--branch", help="Feature branch for --resume. Defaults to the worktree branch."
@@ -2233,8 +3154,9 @@ def main(
         default_harness_dir=default_harness_dir,
     )
     args = parser.parse_args(argv)
-    if args.resume and not args.worktree:
-        parser.error("--worktree is required with --resume")
+    resume_worktree_arg = (
+        Path(args.worktree).expanduser().resolve() if args.worktree else None
+    )
     resume_only_args = resume_only_values(args)
     if not args.resume and any(value is not None for value in resume_only_args):
         parser.error("resume-only arguments require --resume")
@@ -2254,10 +3176,11 @@ def main(
             repo = flow.git_root(config.repo.resolve())
             plan = config.plan.resolve()
             flow.validate(repo, plan)
+            worktree = resume_worktree_arg or flow.infer_resume_worktree(repo, plan)
             flow.resume(
                 repo=repo,
                 plan=plan,
-                worktree=Path(args.worktree).expanduser().resolve(),
+                worktree=worktree,
                 branch=args.branch,
                 run_id=args.run_id,
                 integration_worktree=integration_worktree_arg(

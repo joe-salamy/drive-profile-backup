@@ -312,7 +312,6 @@ def main(argv: list[str] | None = None) -> int:
     plan_source = resolve_source_arg(repo, sessions_root, args.source)
     saved_plan = copy_plan_to_worktree_flow(repo, plan_source.path)
     print(command_for_plan(repo, saved_plan, args.harness, Path(args.harness_dir)))
-    print(command_for_plan(repo, saved_plan, args.harness, Path(args.harness_dir), "python3"))
     return 0
 
 
