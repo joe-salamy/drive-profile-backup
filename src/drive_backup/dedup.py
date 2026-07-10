@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
@@ -14,6 +15,37 @@ from drive_backup.scanner import FileEntry
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 8192
+
+
+def _atomic_write_json(path: str, data: dict[str, object]) -> None:
+    """Atomically write JSON data to path using a same-directory temp file."""
+    path = os.path.expanduser(path)
+    parent = os.path.dirname(path) or "."
+    basename = os.path.basename(path)
+    os.makedirs(parent, exist_ok=True)
+
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=parent,
+            prefix=f".{basename}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            temp_path = tmp.name
+            json.dump(data, tmp, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 @dataclass
@@ -61,9 +93,8 @@ class Manifest:
     def save(self, path: str) -> None:
         """Save manifest to JSON file."""
         path = os.path.expanduser(path)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
 
-        data = {
+        data: dict[str, object] = {
             "version": 1,
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "file_count": len(self.entries),
@@ -72,8 +103,7 @@ class Manifest:
             },
         }
 
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(path, data)
 
         logger.info("Manifest saved: %d entries -> %s", len(self.entries), path)
 

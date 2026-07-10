@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class ManifestProgressError(RuntimeError):
+    """Raised when manifest progress cannot be saved durably."""
+
+
 class BackupEngine:
     """Orchestrates the full backup flow."""
 
@@ -158,6 +162,13 @@ class BackupEngine:
         self.stats.drive_parent_folder_id = parent_id
         return self.drive.get_or_create_folder(self.config.profile_name, parent_id)
 
+    def _save_manifest_progress(self) -> None:
+        """Persist manifest progress after a completed Drive side effect."""
+        try:
+            self.manifest.save(self.config.manifest_path)
+        except Exception as e:
+            raise ManifestProgressError("Could not save manifest progress") from e
+
     def _process_file(
         self,
         file: FileEntry,
@@ -219,6 +230,8 @@ class BackupEngine:
             self._record_upload(file)
             if progress_callback:
                 progress_callback(file, f"uploaded:{reason}")
+        except ManifestProgressError:
+            raise
         except Exception as e:
             logger.error("Failed to upload %s: %s", file.path, e)
             self.stats.files_skipped_error += 1
@@ -307,8 +320,15 @@ class BackupEngine:
             try:
                 assert self.drive is not None
                 self.drive.trash_file(entry.drive_file_id)
+                removed = self.manifest.remove(relative_path)
+                try:
+                    self._save_manifest_progress()
+                except ManifestProgressError:
+                    self.manifest.entries[relative_path] = removed or entry
+                    raise
                 self._record_pruned_file(relative_path, entry)
-                self.manifest.remove(relative_path)
+            except ManifestProgressError:
+                raise
             except Exception as e:
                 logger.error("Failed to prune %s: %s", relative_path, e)
                 self.stats.files_prune_failed += 1
@@ -334,7 +354,7 @@ class BackupEngine:
 
         resumable = file.size > self.config.resumable_threshold_bytes
 
-        # Update existing file or upload new one
+        # Update existing file, reconcile an orphaned same-name file, or upload new one
         existing = self.manifest.get(file.relative_path)
         if (
             existing
@@ -350,7 +370,16 @@ class BackupEngine:
                 existing.drive_file_id, file.path, resumable=resumable
             )
         else:
-            result = self.drive.upload_file(file.path, parent_id, resumable=resumable)
+            filename = os.path.basename(file.path)
+            found = self.drive.find_file_by_name_and_parent(filename, parent_id)
+            if found is not None:
+                result = self.drive.update_file(
+                    found["id"], file.path, resumable=resumable
+                )
+            else:
+                result = self.drive.upload_file(
+                    file.path, parent_id, resumable=resumable
+                )
 
         # Update manifest with Drive's response
         md5 = result.get("md5Checksum", "")
@@ -365,6 +394,7 @@ class BackupEngine:
             drive_file_id=result["id"],
             drive_parent_id=parent_id,
         )
+        self._save_manifest_progress()
 
 
 def _format_mtime(mtime: float) -> str:

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from drive_backup.drive_api import DriveAPI, RateLimiter
+from drive_backup.drive_api import DriveAPI, RateLimiter, _escape_drive_query_value
 
 
 class TestRateLimiter:
@@ -72,6 +72,70 @@ class TestDriveAPI:
         result = api.ensure_folder_path(["a", "b", "c"], "root")
         assert result == "folder_3"
         assert call_count == 3
+
+    def test_find_file_by_name_and_parent_returns_first_match(self) -> None:
+        api = DriveAPI(credentials_path="creds.json", token_path="token.json")
+        mock_service = MagicMock()
+        expected = {
+            "id": "file_123",
+            "name": "file.txt",
+            "md5Checksum": "abc",
+            "size": "5",
+        }
+        mock_service.files.return_value.list.return_value.execute.return_value = {
+            "files": [expected]
+        }
+        api._service = mock_service
+
+        result = api.find_file_by_name_and_parent("file.txt", "parent_id")
+
+        assert result == expected
+        mock_service.files().list.assert_called_once_with(
+            q=(
+                "name='file.txt' and trashed=false and 'parent_id' in parents "
+                "and mimeType!='application/vnd.google-apps.folder'"
+            ),
+            spaces="drive",
+            fields="files(id, name, md5Checksum, size)",
+        )
+
+    def test_find_file_by_name_and_parent_returns_none_when_absent(self) -> None:
+        api = DriveAPI(credentials_path="creds.json", token_path="token.json")
+        mock_service = MagicMock()
+        mock_service.files.return_value.list.return_value.execute.return_value = {
+            "files": []
+        }
+        api._service = mock_service
+        api._rate_limiter = MagicMock()
+
+        result = api.find_file_by_name_and_parent("missing.txt", "parent_id")
+
+        assert result is None
+        mock_service.files().create.assert_not_called()
+        mock_service.files().update.assert_not_called()
+        api._rate_limiter.wait.assert_not_called()
+
+    def test_find_file_by_name_and_parent_escapes_query_name(self) -> None:
+        api = DriveAPI(credentials_path="creds.json", token_path="token.json")
+        mock_service = MagicMock()
+        mock_service.files.return_value.list.return_value.execute.return_value = {
+            "files": []
+        }
+        api._service = mock_service
+        name = "a\\b's.txt"
+
+        result = api.find_file_by_name_and_parent(name, "parent_id")
+
+        assert result is None
+        safe_name = _escape_drive_query_value(name)
+        mock_service.files().list.assert_called_once_with(
+            q=(
+                f"name='{safe_name}' and trashed=false and 'parent_id' in parents "
+                "and mimeType!='application/vnd.google-apps.folder'"
+            ),
+            spaces="drive",
+            fields="files(id, name, md5Checksum, size)",
+        )
 
     def test_authenticate_missing_credentials(self) -> None:
         api = DriveAPI(

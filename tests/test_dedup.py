@@ -2,7 +2,10 @@
 
 import os
 import tempfile
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from drive_backup.dedup import Manifest, compute_md5, needs_upload
 from drive_backup.scanner import FileEntry
@@ -56,6 +59,92 @@ class TestManifest:
             manifest = Manifest()
             manifest.save(path)
             assert os.path.exists(path)
+
+    def test_save_keeps_existing_manifest_when_replace_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "manifest.json"
+        original = Manifest()
+        original.set(
+            relative_path="old.txt",
+            md5="old_md5",
+            size=3,
+            mtime=1.0,
+            drive_file_id="old_drive_id",
+            drive_parent_id="parent",
+        )
+        original.save(str(path))
+
+        def fail_replace(src: str, dst: str) -> None:
+            raise OSError("replace failed")
+
+        monkeypatch.setattr("drive_backup.dedup.os.replace", fail_replace)
+        replacement = Manifest()
+        replacement.set(
+            relative_path="new.txt",
+            md5="new_md5",
+            size=3,
+            mtime=2.0,
+            drive_file_id="new_drive_id",
+            drive_parent_id="parent",
+        )
+
+        with pytest.raises(OSError, match="replace failed"):
+            replacement.save(str(path))
+
+        loaded = Manifest.load(str(path))
+        assert loaded.get("old.txt") is not None
+        assert loaded.get("new.txt") is None
+        assert list(tmp_path.glob(".manifest.json.*.tmp")) == []
+
+    def test_save_replaces_manifest_atomically_on_success(self, tmp_path: Path) -> None:
+        path = tmp_path / "manifest.json"
+        original = Manifest()
+        original.set(
+            relative_path="old.txt",
+            md5="old_md5",
+            size=3,
+            mtime=1.0,
+            drive_file_id="old_drive_id",
+            drive_parent_id="parent",
+        )
+        original.save(str(path))
+
+        replacement = Manifest()
+        replacement.set(
+            relative_path="new.txt",
+            md5="new_md5",
+            size=3,
+            mtime=2.0,
+            drive_file_id="new_drive_id",
+            drive_parent_id="parent",
+        )
+        replacement.save(str(path))
+
+        loaded = Manifest.load(str(path))
+        assert loaded.get("old.txt") is None
+        assert loaded.get("new.txt") is not None
+
+    def test_load_ignores_corrupted_sibling_temp_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "manifest.json"
+        manifest = Manifest()
+        manifest.set(
+            relative_path="valid.txt",
+            md5="valid_md5",
+            size=5,
+            mtime=1.0,
+            drive_file_id="valid_drive_id",
+            drive_parent_id="parent",
+        )
+        manifest.save(str(path))
+        (tmp_path / ".manifest.json.orphan.tmp").write_text(
+            "not json",
+            encoding="utf-8",
+        )
+
+        loaded = Manifest.load(str(path))
+
+        assert loaded.get("valid.txt") is not None
 
     def test_remove_entry(self) -> None:
         manifest = Manifest()

@@ -18,6 +18,11 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
 
+def _escape_drive_query_value(value: str) -> str:
+    """Escape a string literal value for a Drive query."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 class RateLimiter:
     """Simple rate limiter to stay under Drive's write limit."""
 
@@ -100,8 +105,8 @@ class DriveAPI:
         if cache_key in self._folder_cache:
             return self._folder_cache[cache_key]
 
-        # Search for existing folder (escape single quotes to prevent query injection)
-        safe_name = name.replace("\\", "\\\\").replace("'", "\\'")
+        # Search for existing folder (escape query string values)
+        safe_name = _escape_drive_query_value(name)
         query = f"name='{safe_name}' and mimeType='{FOLDER_MIME}' and trashed=false"
         if parent_id:
             query += f" and '{parent_id}' in parents"
@@ -134,6 +139,32 @@ class DriveAPI:
         for part in path_parts:
             current_id = self.get_or_create_folder(part, current_id)
         return current_id
+
+    def find_file_by_name_and_parent(
+        self,
+        name: str,
+        parent_id: str,
+    ) -> dict[str, Any] | None:
+        """Find the first non-folder Drive file by name and parent folder."""
+        safe_name = _escape_drive_query_value(name)
+        query = (
+            f"name='{safe_name}' and trashed=false and '{parent_id}' in parents "
+            f"and mimeType!='{FOLDER_MIME}'"
+        )
+        results = (
+            self.service.files()
+            .list(
+                q=query,
+                spaces="drive",
+                fields="files(id, name, md5Checksum, size)",
+            )
+            .execute()
+        )
+        files = results.get("files", [])
+        if not files:
+            return None
+        result: dict[str, Any] = files[0]
+        return result
 
     def upload_file(
         self,
