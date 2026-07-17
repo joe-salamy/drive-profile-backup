@@ -1,0 +1,14 @@
+{
+  "audit_head_before": "99469a0c1509b9ae23d91996bf7588303e9cb6d2",
+  "base": "main",
+  "completed_stage": "cleanup_complete",
+  "feature_branch": "feature/tech-debt-cleanup",
+  "feature_worktree": "/mnt/c/Users/joesa/code/drive-profile-backup-tech-debt-cleanup",
+  "integration_branch": "integration/tech-debt-cleanup-20260717-121637",
+  "integration_worktree": "/mnt/c/Users/joesa/code/drive-profile-backup-integrate-tech-debt-cleanup-20260717-121637",
+  "merge_mode": "squash",
+  "plan_path": "/mnt/c/Users/joesa/code/drive-profile-backup-tech-debt-cleanup/.omp/worktree-flow/20260717-113621-tech-debt-cleanup/plan.md",
+  "plan_title": "Tech Debt Cleanup",
+  "run_id": "20260717-113621-tech-debt-cleanup",
+  "slug": "tech-debt-cleanup"
+}
