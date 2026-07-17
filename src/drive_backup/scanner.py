@@ -55,25 +55,6 @@ def _is_excluded_file(name: str, exclude_files: list[str]) -> bool:
     return False
 
 
-def _truncate_relative_path(rel_path: str, max_len: int = _MAX_PATH) -> str:
-    """Truncate the filename stem so the full relative path fits within *max_len* chars."""
-    if len(rel_path) <= max_len:
-        return rel_path
-    directory, filename = os.path.split(rel_path)
-    stem, ext = os.path.splitext(filename)
-    # How much room is left for the stem after dir + separator + ext?
-    overhead = len(ext)
-    if directory:
-        overhead += len(directory) + 1  # +1 for the separator
-    max_stem = max_len - overhead
-    if max_stem < 1:
-        max_stem = 1
-    truncated = stem[:max_stem]
-    if directory:
-        return f"{directory}/{truncated}{ext}"
-    return f"{truncated}{ext}"
-
-
 def _is_excluded_by_path(rel_path: str, patterns: list[str]) -> bool:
     """Check if a relative path matches any path-based exclusion pattern."""
     for pattern in patterns:

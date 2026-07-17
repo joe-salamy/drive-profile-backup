@@ -5,9 +5,87 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import cast
+from typing import TypedDict
 
 from drive_backup.utils import human_size
+
+
+class SkippedFileRow(TypedDict):
+    path: str
+    relative_path: str
+    size_bytes: int
+    size_human: str
+    modified: str
+    reason: str
+    extension: str
+
+
+class UploadedFileRow(TypedDict):
+    relative_path: str
+    size_bytes: int
+    size_human: str
+    extension: str
+
+
+class ErrorFileRow(TypedDict):
+    path: str
+    relative_path: str
+    error: str
+
+
+class PrunedFileRow(TypedDict):
+    relative_path: str
+    drive_file_id: str
+    size_bytes: int
+    size_human: str
+
+
+class PruneErrorRow(TypedDict):
+    relative_path: str
+    drive_file_id: str
+    error: str
+
+
+class ExtensionBreakdownRow(TypedDict):
+    extension: str
+    count: int
+    size_bytes: int
+    size_human: str
+
+
+class BackupReport(TypedDict):
+    backup_timestamp: str
+    duration_seconds: float
+    duration_human: str
+    backup_root: str
+    profile_name: str
+    dry_run: bool
+    files_scanned: int
+    files_uploaded: int
+    files_skipped_dedup: int
+    files_skipped_exclusion: int
+    files_skipped_error: int
+    total_files_eligible: int
+    total_bytes_uploaded: int
+    total_size_uploaded_human: str
+    total_bytes_eligible: int
+    total_size_eligible_human: str
+    drive_parent_folder_id: str
+    drive_folder_id: str
+    drive_folder_url: str
+    prune_enabled: bool
+    files_pruned: int
+    files_prune_failed: int
+    total_bytes_pruned: int
+    total_size_pruned_human: str
+    prune_skipped_reason: str
+    pruned_files: list[PrunedFileRow]
+    prune_error_files: list[PruneErrorRow]
+    skipped_files: list[SkippedFileRow]
+    uploaded_files: list[UploadedFileRow]
+    extension_breakdown: list[ExtensionBreakdownRow]
+    error_files: list[ErrorFileRow]
+    excluded_directories_count: int
 
 
 @dataclass
@@ -112,28 +190,28 @@ class BackupStats:
 
 def _extension_breakdown(
     uploaded_files: list[UploadFile],
-) -> list[dict[str, object]]:
+) -> list[ExtensionBreakdownRow]:
     """Aggregate uploaded files by extension, sorted by total size desc."""
     by_ext: dict[str, dict[str, int]] = {}
-    for uf in uploaded_files:
-        ext = uf.extension or "(no extension)"
-        bucket = by_ext.setdefault(ext, {"count": 0, "size_bytes": 0})
+    for uploaded_file in uploaded_files:
+        extension = uploaded_file.extension or "(no extension)"
+        bucket = by_ext.setdefault(extension, {"count": 0, "size_bytes": 0})
         bucket["count"] += 1
-        bucket["size_bytes"] += uf.size_bytes
-    rows: list[dict[str, object]] = [
+        bucket["size_bytes"] += uploaded_file.size_bytes
+    rows: list[ExtensionBreakdownRow] = [
         {
-            "extension": ext,
+            "extension": extension,
             "count": data["count"],
             "size_bytes": data["size_bytes"],
             "size_human": human_size(data["size_bytes"]),
         }
-        for ext, data in by_ext.items()
+        for extension, data in by_ext.items()
     ]
-    rows.sort(key=lambda r: cast(int, r["size_bytes"]), reverse=True)
+    rows.sort(key=lambda row: row["size_bytes"], reverse=True)
     return rows
 
 
-def generate_report(stats: BackupStats) -> dict[str, object]:
+def generate_report(stats: BackupStats) -> BackupReport:
     """Build the full JSON report structure from backup stats."""
     return {
         "backup_timestamp": datetime.now(timezone.utc).isoformat(),
@@ -212,7 +290,7 @@ def generate_report(stats: BackupStats) -> dict[str, object]:
     }
 
 
-def save_report(report: dict[str, object], path: str) -> None:
+def save_report(report: BackupReport, path: str) -> None:
     """Write report dict to a JSON file."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)

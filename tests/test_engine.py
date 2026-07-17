@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -11,8 +9,15 @@ import pytest
 
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, compute_md5
-from drive_backup.engine import BackupEngine, ManifestProgressError, _format_mtime
+from drive_backup.engine import (
+    BackupEngine,
+    ManifestProgressError,
+    ProgressEvent,
+    ProgressKind,
+    _format_mtime,
+)
 from drive_backup.scanner import FileEntry
+from tests.file_helpers import write_tree
 
 
 class TestFormatMtime:
@@ -25,254 +30,226 @@ class TestFormatMtime:
 
 
 class TestBackupEngineDryRun:
-    def _make_tree(self, tmp: str, files: dict[str, str]) -> None:
-        for rel_path, content in files.items():
-            full = os.path.join(tmp, rel_path)
-            os.makedirs(os.path.dirname(full), exist_ok=True)
-            with open(full, "w") as f:
-                f.write(content)
+    def test_dry_run_scans_without_uploading(self, tmp_path: Path) -> None:
+        write_tree(
+            tmp_path,
+            {"file1.txt": "hello", "sub/file2.txt": "world"},
+        )
+        manifest_path = tmp_path / "manifest.json"
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
 
-    def test_dry_run_scans_without_uploading(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {"file1.txt": "hello", "sub/file2.txt": "world"})
-            manifest_path = os.path.join(tmp, "manifest.json")
+        report = BackupEngine(config, dry_run=True).run()
 
-            config = Config(
-                profile_name="laptop-a",
-                backup_root=tmp,
-                exclude_dirs=[],
-                exclude_files=[],
-                manifest_path=manifest_path,
-            )
-            engine = BackupEngine(config, dry_run=True)
-            report = engine.run()
+        assert report["dry_run"] is True
+        assert report["files_scanned"] >= 2
+        assert report["files_uploaded"] >= 2
+        assert not manifest_path.exists()
 
-            assert report["dry_run"] is True
-            assert report["files_scanned"] >= 2
-            assert report["files_uploaded"] >= 2
-            # No manifest should be saved in dry-run
-            assert not os.path.exists(manifest_path)
+    def test_dry_run_calls_progress_callback(self, tmp_path: Path) -> None:
+        write_tree(tmp_path, {"file.txt": "data"})
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
+        calls: list[tuple[str, ProgressEvent]] = []
 
-    def test_dry_run_calls_progress_callback(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {"file.txt": "data"})
-            config = Config(
-                profile_name="laptop-a",
-                backup_root=tmp,
-                exclude_dirs=[],
-                exclude_files=[],
-                manifest_path=os.path.join(tmp, "manifest.json"),
-            )
-            engine = BackupEngine(config, dry_run=True)
-            calls: list[tuple[str, str]] = []
+        def callback(file: FileEntry, event: ProgressEvent) -> None:
+            calls.append((file.relative_path, event))
 
-            def callback(file: FileEntry, action: str) -> None:
-                calls.append((file.relative_path, action))
+        BackupEngine(config, dry_run=True).run(progress_callback=callback)
 
-            engine.run(progress_callback=callback)
+        assert len(calls) >= 1
+        assert any(
+            event.kind is ProgressKind.WOULD_UPLOAD and event.reason == "new"
+            for _, event in calls
+        )
 
-            assert len(calls) >= 1
-            assert any("would_upload" in action for _, action in calls)
+    def test_dry_run_skips_excluded_files(self, tmp_path: Path) -> None:
+        write_tree(
+            tmp_path,
+            {
+                "keep.txt": "keep",
+                "Thumbs.db": "skip",
+            },
+        )
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=["Thumbs.db"],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
 
-    def test_dry_run_skips_excluded_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(
-                tmp,
-                {
-                    "keep.txt": "keep",
-                    "Thumbs.db": "skip",
-                },
-            )
-            config = Config(
-                profile_name="laptop-a",
-                backup_root=tmp,
-                exclude_dirs=[],
-                exclude_files=["Thumbs.db"],
-                manifest_path=os.path.join(tmp, "manifest.json"),
-            )
-            engine = BackupEngine(config, dry_run=True)
-            report = engine.run()
+        report = BackupEngine(config, dry_run=True).run()
 
-            assert report["files_skipped_exclusion"] == 1
+        assert report["files_skipped_exclusion"] == 1
 
-    def test_dedup_skips_unchanged_files(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {"file.txt": "content"})
-            # Put manifest outside the backup root to avoid scanning it
-            manifest_dir = tempfile.mkdtemp()
-            manifest_path = os.path.join(manifest_dir, "manifest.json")
-            config = Config(
-                profile_name="laptop-a",
-                backup_root=tmp,
-                exclude_dirs=[],
-                exclude_files=[],
-                manifest_path=manifest_path,
-            )
+    def test_dedup_skips_unchanged_files(self, tmp_path: Path) -> None:
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        write_tree(backup_root, {"file.txt": "content"})
+        manifest_path = state_dir / "manifest.json"
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
+        stat = (backup_root / "file.txt").stat()
+        manifest = Manifest()
+        manifest.set(
+            relative_path="file.txt",
+            md5="abc",
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+            drive_file_id="id",
+            drive_parent_id="pid",
+        )
+        manifest.save(str(manifest_path))
 
-            # Pre-populate manifest with matching entry
-            file_path = os.path.join(tmp, "file.txt")
-            stat = os.stat(file_path)
-            manifest = Manifest()
-            manifest.set(
-                relative_path="file.txt",
-                md5="abc",
-                size=stat.st_size,
-                mtime=stat.st_mtime,
-                drive_file_id="id",
-                drive_parent_id="pid",
-            )
-            manifest.save(manifest_path)
+        report = BackupEngine(config, dry_run=True).run()
 
-            engine = BackupEngine(config, dry_run=True)
-            report = engine.run()
+        assert report["files_skipped_dedup"] == 1
+        assert report["files_uploaded"] == 0
 
-            assert report["files_skipped_dedup"] == 1
-            assert report["files_uploaded"] == 0
+    def test_full_mode_ignores_manifest(self, tmp_path: Path) -> None:
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        write_tree(backup_root, {"file.txt": "content"})
+        manifest_path = state_dir / "manifest.json"
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
+        stat = (backup_root / "file.txt").stat()
+        manifest = Manifest()
+        manifest.set(
+            relative_path="file.txt",
+            md5="abc",
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+            drive_file_id="id",
+            drive_parent_id="pid",
+        )
+        manifest.save(str(manifest_path))
 
-    def test_full_mode_ignores_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._make_tree(tmp, {"file.txt": "content"})
-            # Put manifest outside the backup root
-            manifest_dir = tempfile.mkdtemp()
-            manifest_path = os.path.join(manifest_dir, "manifest.json")
-            config = Config(
-                profile_name="laptop-a",
-                backup_root=tmp,
-                exclude_dirs=[],
-                exclude_files=[],
-                manifest_path=manifest_path,
-            )
+        report = BackupEngine(config, dry_run=True, full=True).run()
 
-            # Pre-populate manifest
-            file_path = os.path.join(tmp, "file.txt")
-            stat = os.stat(file_path)
-            manifest = Manifest()
-            manifest.set(
-                relative_path="file.txt",
-                md5="abc",
-                size=stat.st_size,
-                mtime=stat.st_mtime,
-                drive_file_id="id",
-                drive_parent_id="pid",
-            )
-            manifest.save(manifest_path)
+        assert report["files_uploaded"] == 1
 
-            engine = BackupEngine(config, dry_run=True, full=True)
-            report = engine.run()
+    def test_prune_disabled_ignores_stale_manifest_entries(
+        self, tmp_path: Path
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        backup_root.mkdir()
+        manifest_path = tmp_path / "state" / "manifest.json"
+        manifest = Manifest()
+        manifest.set(
+            relative_path="old/file.txt",
+            md5="abc",
+            size=10,
+            mtime=1.0,
+            drive_file_id="drive_old",
+            drive_parent_id="parent",
+        )
+        manifest.save(str(manifest_path))
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
 
-            # Full mode should re-upload even if manifest matches
-            assert report["files_uploaded"] == 1
+        report = BackupEngine(config, dry_run=True, prune=False).run()
 
-    def test_prune_disabled_ignores_stale_manifest_entries(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            backup_root = os.path.join(tmp, "backup")
-            manifest_dir = os.path.join(tmp, "state")
-            os.makedirs(backup_root)
-            os.makedirs(manifest_dir)
-            manifest_path = os.path.join(manifest_dir, "manifest.json")
-            manifest = Manifest()
-            manifest.set(
-                relative_path="old/file.txt",
-                md5="abc",
-                size=10,
-                mtime=1.0,
-                drive_file_id="drive_old",
-                drive_parent_id="parent",
-            )
-            manifest.save(manifest_path)
-            config = Config(
-                profile_name="laptop-a",
-                backup_root=backup_root,
-                exclude_dirs=[],
-                exclude_files=[],
-                manifest_path=manifest_path,
-            )
+        assert report["files_pruned"] == 0
+        assert report["pruned_files"] == []
 
-            report = BackupEngine(config, dry_run=True, prune=False).run()
+    def test_dry_run_prune_reports_stale_entries_without_saving_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        write_tree(backup_root, {"keep.txt": "keep"})
+        manifest_path = tmp_path / "state" / "manifest.json"
+        stat = (backup_root / "keep.txt").stat()
+        manifest = Manifest()
+        manifest.set(
+            relative_path="keep.txt",
+            md5="abc",
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+            drive_file_id="drive_keep",
+            drive_parent_id="parent",
+        )
+        manifest.set(
+            relative_path="old/moved.txt",
+            md5="def",
+            size=20,
+            mtime=1.0,
+            drive_file_id="drive_old",
+            drive_parent_id="parent",
+        )
+        manifest.save(str(manifest_path))
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
 
-            assert report["files_pruned"] == 0
-            assert report["pruned_files"] == []
+        report = BackupEngine(config, dry_run=True, prune=True).run()
 
-    def test_dry_run_prune_reports_stale_entries_without_saving_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            backup_root = os.path.join(tmp, "backup")
-            manifest_dir = os.path.join(tmp, "state")
-            os.makedirs(backup_root)
-            os.makedirs(manifest_dir)
-            self._make_tree(backup_root, {"keep.txt": "keep"})
-            manifest_path = os.path.join(manifest_dir, "manifest.json")
-            keep_path = os.path.join(backup_root, "keep.txt")
-            stat = os.stat(keep_path)
-            manifest = Manifest()
-            manifest.set(
-                relative_path="keep.txt",
-                md5="abc",
-                size=stat.st_size,
-                mtime=stat.st_mtime,
-                drive_file_id="drive_keep",
-                drive_parent_id="parent",
-            )
-            manifest.set(
-                relative_path="old/moved.txt",
-                md5="def",
-                size=20,
-                mtime=1.0,
-                drive_file_id="drive_old",
-                drive_parent_id="parent",
-            )
-            manifest.save(manifest_path)
-            config = Config(
-                profile_name="laptop-a",
-                backup_root=backup_root,
-                exclude_dirs=[],
-                exclude_files=[],
-                manifest_path=manifest_path,
-            )
-
-            report = BackupEngine(config, dry_run=True, prune=True).run()
-
-            assert report["files_pruned"] == 1
-            assert report["pruned_files"][0]["relative_path"] == "old/moved.txt"
-            assert Manifest.load(manifest_path).get("old/moved.txt") is not None
+        assert report["files_pruned"] == 1
+        assert report["pruned_files"][0]["relative_path"] == "old/moved.txt"
+        assert Manifest.load(str(manifest_path)).get("old/moved.txt") is not None
 
 
 class TestBackupEngineUploadErrors:
-    def test_upload_error_is_captured(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            file_path = os.path.join(tmp, "file.txt")
-            with open(file_path, "w") as f:
-                f.write("test")
+    def test_upload_error_is_captured(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "file.txt"
+        file_path.write_text("test", encoding="utf-8")
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
+        engine = BackupEngine(config, dry_run=False)
+        mock_drive = MagicMock()
+        mock_drive.get_or_create_folder.return_value = "root_id"
+        mock_drive.upload_file.side_effect = RuntimeError("Upload failed")
+        mock_drive.find_file_by_name_and_parent.return_value = None
+        engine.drive = mock_drive
+        engine._root_folder_id = "root_id"
+        stat = file_path.stat()
+        entry = FileEntry(
+            path=str(file_path),
+            relative_path="file.txt",
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+        )
 
-            config = Config(
-                profile_name="laptop-a",
-                backup_root=tmp,
-                exclude_dirs=[],
-                exclude_files=[],
-                manifest_path=os.path.join(tmp, "manifest.json"),
-            )
-            engine = BackupEngine(config, dry_run=False)
+        engine._process_file(entry)
 
-            # Mock the drive to raise on upload
-            mock_drive = MagicMock()
-            mock_drive.get_or_create_folder.return_value = "root_id"
-            mock_drive.upload_file.side_effect = RuntimeError("Upload failed")
-            mock_drive.find_file_by_name_and_parent.return_value = None
-            engine.drive = mock_drive
-            engine._root_folder_id = "root_id"
-
-            # Process a single file manually
-            stat = os.stat(file_path)
-            entry = FileEntry(
-                path=file_path,
-                relative_path="file.txt",
-                size=stat.st_size,
-                mtime=stat.st_mtime,
-            )
-            engine._process_file(entry)
-
-            assert engine.stats.files_skipped_error == 1
-            assert len(engine.stats.error_files) == 1
-            assert "Upload failed" in engine.stats.error_files[0].error
+        assert engine.stats.files_skipped_error == 1
+        assert len(engine.stats.error_files) == 1
+        assert "Upload failed" in engine.stats.error_files[0].error
 
     def test_successful_upload_persists_manifest_before_run_finishes(
         self, tmp_path: Path
@@ -544,7 +521,6 @@ class TestBackupEngineUploadErrors:
                 raise RuntimeError("Report upload failed")
 
         monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
-
         config = Config(
             profile_name="laptop-a",
             backup_root=str(tmp_path),
@@ -552,9 +528,8 @@ class TestBackupEngineUploadErrors:
             exclude_files=[],
             manifest_path=str(tmp_path / "manifest.json"),
         )
-        engine = BackupEngine(config, dry_run=False)
 
-        report = engine.run()
+        report = BackupEngine(config, dry_run=False).run()
 
         assert report["files_scanned"] == 0
 

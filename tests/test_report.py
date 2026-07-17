@@ -94,6 +94,40 @@ class TestGenerateReport:
         assert report["prune_skipped_reason"] == ""
         assert report["pruned_files"] == []
         assert report["prune_error_files"] == []
+        assert tuple(report) == (
+            "backup_timestamp",
+            "duration_seconds",
+            "duration_human",
+            "backup_root",
+            "profile_name",
+            "dry_run",
+            "files_scanned",
+            "files_uploaded",
+            "files_skipped_dedup",
+            "files_skipped_exclusion",
+            "files_skipped_error",
+            "total_files_eligible",
+            "total_bytes_uploaded",
+            "total_size_uploaded_human",
+            "total_bytes_eligible",
+            "total_size_eligible_human",
+            "drive_parent_folder_id",
+            "drive_folder_id",
+            "drive_folder_url",
+            "prune_enabled",
+            "files_pruned",
+            "files_prune_failed",
+            "total_bytes_pruned",
+            "total_size_pruned_human",
+            "prune_skipped_reason",
+            "pruned_files",
+            "prune_error_files",
+            "skipped_files",
+            "uploaded_files",
+            "extension_breakdown",
+            "error_files",
+            "excluded_directories_count",
+        )
 
     def test_report_includes_skipped_files(self) -> None:
         stats = BackupStats(
@@ -110,8 +144,8 @@ class TestGenerateReport:
             ],
         )
         report = generate_report(stats)
-        assert len(report["skipped_files"]) == 1  # type: ignore[arg-type]
-        assert report["skipped_files"][0]["reason"] == "type_excluded"  # type: ignore[index]
+        assert len(report["skipped_files"]) == 1
+        assert report["skipped_files"][0]["reason"] == "type_excluded"
 
     def test_report_includes_error_files(self) -> None:
         stats = BackupStats(
@@ -124,8 +158,8 @@ class TestGenerateReport:
             ],
         )
         report = generate_report(stats)
-        assert len(report["error_files"]) == 1  # type: ignore[arg-type]
-        assert report["error_files"][0]["error"] == "Permission denied"  # type: ignore[index]
+        assert len(report["error_files"]) == 1
+        assert report["error_files"][0]["error"] == "Permission denied"
 
     def test_report_includes_pruned_files(self) -> None:
         stats = BackupStats(
@@ -139,8 +173,8 @@ class TestGenerateReport:
             ],
         )
         report = generate_report(stats)
-        assert len(report["pruned_files"]) == 1  # type: ignore[arg-type]
-        assert report["pruned_files"][0]["drive_file_id"] == "drive_old"  # type: ignore[index]
+        assert len(report["pruned_files"]) == 1
+        assert report["pruned_files"][0]["drive_file_id"] == "drive_old"
 
     def test_report_includes_prune_errors(self) -> None:
         stats = BackupStats(
@@ -153,8 +187,8 @@ class TestGenerateReport:
             ],
         )
         report = generate_report(stats)
-        assert len(report["prune_error_files"]) == 1  # type: ignore[arg-type]
-        assert report["prune_error_files"][0]["error"] == "not found"  # type: ignore[index]
+        assert len(report["prune_error_files"]) == 1
+        assert report["prune_error_files"][0]["error"] == "not found"
 
 
 class TestSaveReport:

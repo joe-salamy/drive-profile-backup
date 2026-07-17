@@ -8,7 +8,7 @@ import random
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 # MIME type for Google Drive folders
 FOLDER_MIME = "application/vnd.google-apps.folder"
+T = TypeVar("T")
 
 
 def _escape_drive_query_value(value: str) -> str:
@@ -111,8 +112,8 @@ class DriveAPI:
         if parent_id:
             query += f" and '{parent_id}' in parents"
 
-        results = (
-            self.service.files()
+        results = self._execute_with_retry(
+            lambda: self.service.files()
             .list(q=query, spaces="drive", fields="files(id, name)")
             .execute()
         )
@@ -122,11 +123,10 @@ class DriveAPI:
             folder_id: str = files[0]["id"]
             logger.debug("Found existing folder '%s': %s", name, folder_id)
         else:
-            self._rate_limiter.wait()
             metadata: dict[str, Any] = {"name": name, "mimeType": FOLDER_MIME}
             if parent_id:
                 metadata["parents"] = [parent_id]
-            folder = self.service.files().create(body=metadata, fields="id").execute()
+            folder = self._execute_with_retry(lambda: self._create_folder(metadata))
             folder_id = str(folder["id"])
             logger.debug("Created folder '%s': %s", name, folder_id)
 
@@ -151,8 +151,8 @@ class DriveAPI:
             f"name='{safe_name}' and trashed=false and '{parent_id}' in parents "
             f"and mimeType!='{FOLDER_MIME}'"
         )
-        results = (
-            self.service.files()
+        results = self._execute_with_retry(
+            lambda: self.service.files()
             .list(
                 q=query,
                 spaces="drive",
@@ -209,6 +209,13 @@ class DriveAPI:
         """Move a Drive file to trash. Returns updated file metadata."""
         return self._execute_with_retry(lambda: self._do_trash_file(file_id))
 
+    def _create_folder(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        self._rate_limiter.wait()
+        result: dict[str, Any] = (
+            self.service.files().create(body=metadata, fields="id").execute()
+        )
+        return result
+
     def _do_upload(
         self, metadata: dict[str, Any], media: Any, resumable: bool
     ) -> dict[str, Any]:
@@ -254,7 +261,7 @@ class DriveAPI:
                 logger.debug("Upload progress: %.0f%%", status.progress() * 100)
         return response
 
-    def _execute_with_retry(self, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    def _execute_with_retry(self, fn: Callable[[], T]) -> T:
         """Execute a function with exponential backoff on retryable errors."""
         from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 

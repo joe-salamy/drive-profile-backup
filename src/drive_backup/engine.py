@@ -7,12 +7,15 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, ManifestEntry, compute_md5, needs_upload
 from drive_backup.report import (
+    BackupReport,
     BackupStats,
     ErrorFile,
     PruneError,
@@ -29,6 +32,20 @@ if TYPE_CHECKING:
     from drive_backup.drive_api import DriveAPI
 
 logger = logging.getLogger(__name__)
+
+
+class ProgressKind(StrEnum):
+    SKIPPED = "skipped"
+    DEDUP = "dedup"
+    WOULD_UPLOAD = "would_upload"
+    UPLOADED = "uploaded"
+    ERROR = "error"
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressEvent:
+    kind: ProgressKind
+    reason: str = ""
 
 
 class ManifestProgressError(RuntimeError):
@@ -61,12 +78,12 @@ class BackupEngine:
 
     def run(
         self,
-        progress_callback: Callable[[FileEntry, str], None] | None = None,
-    ) -> dict[str, Any]:
+        progress_callback: Callable[[FileEntry, ProgressEvent], None] | None = None,
+    ) -> BackupReport:
         """Execute the full backup and return the report dict.
 
         Args:
-            progress_callback: Optional callable(file: FileEntry, action: str)
+            progress_callback: Optional callable(file: FileEntry, event: ProgressEvent)
                 called for each file processed. Used by CLI for progress display.
         """
         self.stats.start_time = time.time()
@@ -172,7 +189,7 @@ class BackupEngine:
     def _process_file(
         self,
         file: FileEntry,
-        progress_callback: Callable[[FileEntry, str], None] | None = None,
+        progress_callback: Callable[[FileEntry, ProgressEvent], None] | None = None,
     ) -> None:
         """Process a single file: check exclusions, dedup, upload."""
         # Skipped by scanner (exclusion or error)
@@ -200,7 +217,7 @@ class BackupEngine:
                     )
                 )
             if progress_callback:
-                progress_callback(file, "skipped")
+                progress_callback(file, ProgressEvent(ProgressKind.SKIPPED))
             return
 
         # Eligible file — track total
@@ -211,7 +228,7 @@ class BackupEngine:
         if not should_upload:
             self.stats.files_skipped_dedup += 1
             if progress_callback:
-                progress_callback(file, f"dedup:{reason}")
+                progress_callback(file, ProgressEvent(ProgressKind.DEDUP, reason))
             return
 
         # Upload (or simulate in dry-run)
@@ -220,7 +237,9 @@ class BackupEngine:
             self.stats.bytes_uploaded += file.size
             self._record_upload(file)
             if progress_callback:
-                progress_callback(file, f"would_upload:{reason}")
+                progress_callback(
+                    file, ProgressEvent(ProgressKind.WOULD_UPLOAD, reason)
+                )
             return
 
         try:
@@ -229,7 +248,7 @@ class BackupEngine:
             self.stats.bytes_uploaded += file.size
             self._record_upload(file)
             if progress_callback:
-                progress_callback(file, f"uploaded:{reason}")
+                progress_callback(file, ProgressEvent(ProgressKind.UPLOADED, reason))
         except ManifestProgressError:
             raise
         except Exception as e:
@@ -243,7 +262,7 @@ class BackupEngine:
                 )
             )
             if progress_callback:
-                progress_callback(file, "error")
+                progress_callback(file, ProgressEvent(ProgressKind.ERROR))
 
     def _record_upload(self, file: FileEntry) -> None:
         """Track an uploaded (or would-be-uploaded) file for reporting."""

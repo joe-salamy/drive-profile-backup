@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -202,6 +203,90 @@ def _validate_profile_name(profile_name: str) -> None:
         raise ValueError("profile_name must not contain control characters")
 
 
+_STRING_FIELDS = {
+    "backup_root",
+    "profile_name",
+    "drive_parent_folder_name",
+    "manifest_path",
+    "credentials_path",
+    "token_path",
+}
+_STRING_LIST_FIELDS = {
+    "exclude_dirs",
+    "exclude_files",
+    "exclude_path_patterns",
+    "exclude_specific_files",
+    "no_size_limit",
+}
+_NUMBER_FIELDS = {
+    "max_file_size_mb",
+    "resumable_threshold_mb",
+    "writes_per_second",
+}
+_CONFIG_FIELDS = (
+    _STRING_FIELDS
+    | _STRING_LIST_FIELDS
+    | _NUMBER_FIELDS
+    | {"exclude_symlinks", "max_retries", "size_limits_by_type"}
+)
+
+
+def _invalid_value(field_name: str, expectation: str) -> ValueError:
+    return ValueError(f"Invalid configuration value for '{field_name}': {expectation}")
+
+
+def _finite_number(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _invalid_value(field_name, "expected a finite number")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise _invalid_value(field_name, "expected a finite number")
+    return normalized
+
+
+def _validate_config_values(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValueError("Configuration root must be a mapping")
+
+    unknown_keys = sorted((str(key) for key in data if key not in _CONFIG_FIELDS))
+    if unknown_keys:
+        raise ValueError(f"Unknown configuration keys: {', '.join(unknown_keys)}")
+
+    values: dict[str, Any] = {}
+    for field_name, value in data.items():
+        if field_name in _STRING_FIELDS:
+            if not isinstance(value, str):
+                raise _invalid_value(field_name, "expected a string")
+            values[field_name] = value
+        elif field_name in _STRING_LIST_FIELDS:
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value
+            ):
+                raise _invalid_value(field_name, "expected a list of strings")
+            values[field_name] = value
+        elif field_name == "exclude_symlinks":
+            if type(value) is not bool:
+                raise _invalid_value(field_name, "expected a boolean")
+            values[field_name] = value
+        elif field_name == "max_retries":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise _invalid_value(field_name, "expected an integer")
+            values[field_name] = value
+        elif field_name in _NUMBER_FIELDS:
+            values[field_name] = _finite_number(value, field_name)
+        else:
+            if not isinstance(value, dict) or not all(
+                isinstance(key, str) for key in value
+            ):
+                raise _invalid_value(
+                    field_name, "expected a mapping of strings to finite numbers"
+                )
+            values[field_name] = {
+                key: _finite_number(limit, field_name) for key, limit in value.items()
+            }
+    return values
+
+
 def load_config(path: str | Path) -> Config:
     """Load configuration from a YAML file, falling back to defaults."""
     path = Path(path)
@@ -209,12 +294,6 @@ def load_config(path: str | Path) -> Config:
         return Config()
 
     with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+        data = yaml.safe_load(f)
 
-    # Map YAML keys to Config fields
-    kwargs: dict[str, Any] = {}
-    for key in Config.__dataclass_fields__:
-        if key in data:
-            kwargs[key] = data[key]
-
-    return Config(**kwargs)
+    return Config(**_validate_config_values({} if data is None else data))

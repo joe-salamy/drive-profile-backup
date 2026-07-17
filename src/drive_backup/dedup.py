@@ -5,10 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 from drive_backup.scanner import FileEntry
 
@@ -60,6 +63,70 @@ class ManifestEntry:
     last_uploaded: str  # ISO timestamp
 
 
+class ManifestLoadError(RuntimeError):
+    """Raised when an existing manifest cannot be loaded safely."""
+
+
+_MANIFEST_ENTRY_FIELDS = {
+    "md5",
+    "size",
+    "mtime",
+    "drive_file_id",
+    "drive_parent_id",
+    "last_uploaded",
+}
+_MANIFEST_ENTRY_STRING_FIELDS = _MANIFEST_ENTRY_FIELDS - {"size", "mtime"}
+
+
+def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
+    if not isinstance(data, Mapping):
+        raise ValueError("manifest root must be a mapping")
+    version = data.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
+        raise ValueError("manifest version must be the integer 1")
+    files = data.get("files")
+    if not isinstance(files, Mapping):
+        raise ValueError("manifest files must be a mapping")
+
+    entries: dict[str, ManifestEntry] = {}
+    for relative_path, entry_data in files.items():
+        if not isinstance(relative_path, str):
+            raise ValueError("manifest file paths must be strings")
+        if not isinstance(entry_data, Mapping):
+            raise ValueError(f"entry {relative_path!r} must be a mapping")
+        if set(entry_data) != _MANIFEST_ENTRY_FIELDS:
+            raise ValueError(
+                f"entry {relative_path!r} must contain exactly "
+                f"{', '.join(sorted(_MANIFEST_ENTRY_FIELDS))}"
+            )
+        if not all(
+            isinstance(entry_data[field_name], str)
+            for field_name in _MANIFEST_ENTRY_STRING_FIELDS
+        ):
+            raise ValueError(f"entry {relative_path!r} string fields must be strings")
+        size = entry_data["size"]
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError(
+                f"entry {relative_path!r} size must be a non-negative integer"
+            )
+        mtime = entry_data["mtime"]
+        if (
+            isinstance(mtime, bool)
+            or not isinstance(mtime, (int, float))
+            or not math.isfinite(float(mtime))
+        ):
+            raise ValueError(f"entry {relative_path!r} mtime must be a finite number")
+        entries[relative_path] = ManifestEntry(
+            md5=entry_data["md5"],
+            size=size,
+            mtime=float(mtime),
+            drive_file_id=entry_data["drive_file_id"],
+            drive_parent_id=entry_data["drive_parent_id"],
+            last_uploaded=entry_data["last_uploaded"],
+        )
+    return entries
+
+
 @dataclass
 class Manifest:
     """Tracks what has been uploaded to Drive."""
@@ -68,7 +135,7 @@ class Manifest:
 
     @classmethod
     def load(cls, path: str) -> Manifest:
-        """Load manifest from JSON file, or return empty manifest."""
+        """Load a valid version-1 manifest, or return empty when it is absent."""
         path = os.path.expanduser(path)
         if not os.path.exists(path):
             return cls()
@@ -76,19 +143,11 @@ class Manifest:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Could not load manifest from %s: %s", path, e)
-            return cls()
-
-        entries = {}
-        for rel_path, entry_data in data.get("files", {}).items():
-            try:
-                entries[rel_path] = ManifestEntry(**entry_data)
-            except TypeError:
-                logger.debug("Skipping malformed manifest entry: %s", rel_path)
-                continue
-
-        return cls(entries=entries)
+            return cls(entries=_load_manifest_entries(data))
+        except (json.JSONDecodeError, OSError, TypeError, ValueError) as error:
+            raise ManifestLoadError(
+                f"Could not load manifest from {path}: {error}"
+            ) from error
 
     def save(self, path: str) -> None:
         """Save manifest to JSON file."""

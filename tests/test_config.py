@@ -1,7 +1,5 @@
 """Tests for config loading and defaults."""
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -90,32 +88,88 @@ class TestLoadConfig:
         with pytest.raises(ValueError, match="profile_name"):
             load_config("/nonexistent/path/config.yaml")
 
-    def test_load_yaml_overrides(self) -> None:
-        data = {
-            "profile_name": "laptop-a",
-            "backup_root": "C:\\Test",
-            "max_file_size_mb": 100,
-            "exclude_dirs": ["custom_dir"],
-        }
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.dump(data, f)
-            f.flush()
-            config = load_config(f.name)
+    def test_load_yaml_overrides(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "profile_name": "laptop-a",
+                    "backup_root": "C:\\Test",
+                    "max_file_size_mb": 100,
+                    "exclude_dirs": ["custom_dir"],
+                }
+            ),
+            encoding="utf-8",
+        )
 
-        os.unlink(f.name)
+        config = load_config(path)
 
         assert config.backup_root == "C:\\Test"
-        assert config.max_file_size_mb == 100
+        assert config.max_file_size_mb == 100.0
         assert config.exclude_dirs == ["custom_dir"]
 
-    def test_load_partial_yaml_keeps_other_defaults(self) -> None:
-        data = {"profile_name": "laptop-a", "max_file_size_mb": 200}
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.dump(data, f)
-            f.flush()
-            config = load_config(f.name)
+    def test_load_partial_yaml_keeps_other_defaults(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            yaml.safe_dump({"profile_name": "laptop-a", "max_file_size_mb": 200}),
+            encoding="utf-8",
+        )
 
-        os.unlink(f.name)
+        config = load_config(path)
 
-        assert config.max_file_size_mb == 200
+        assert config.max_file_size_mb == 200.0
         assert "AppData" in config.exclude_dirs  # Default preserved
+
+    def test_rejects_unknown_keys_in_sorted_order(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            "profile_name: laptop-a\nzebra: true\nexclude_file: [x]\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="Unknown configuration keys: exclude_file, zebra",
+        ):
+            load_config(path)
+
+    @pytest.mark.parametrize(
+        ("field_name", "value", "expectation"),
+        [
+            ("backup_root", [], "expected a string"),
+            ("exclude_dirs", "venv", "expected a list of strings"),
+            ("exclude_symlinks", 1, "expected a boolean"),
+            ("max_retries", True, "expected an integer"),
+            ("max_file_size_mb", ".inf", "expected a finite number"),
+            (
+                "size_limits_by_type",
+                {".zip": True},
+                "expected a finite number",
+            ),
+        ],
+    )
+    def test_rejects_wrong_typed_values(
+        self,
+        tmp_path: Path,
+        field_name: str,
+        value: object,
+        expectation: str,
+    ) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            yaml.safe_dump({"profile_name": "laptop-a", field_name: value}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=rf"Invalid configuration value for '{field_name}': {expectation}",
+        ):
+            load_config(path)
+
+    def test_rejects_non_mapping_root(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text("- profile_name\n- laptop-a\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Configuration root must be a mapping"):
+            load_config(path)

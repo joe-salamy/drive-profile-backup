@@ -10,14 +10,17 @@ from __future__ import annotations
 import argparse
 import heapq
 import os
+import shutil
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
+from typing import TextIO, cast
 
-from drive_backup.config import load_config
-from drive_backup.scanner import FileEntry, scan
+from drive_backup.config import Config, load_config
+from drive_backup.scanner import scan
 from drive_backup.utils import human_size
 
 _WIN32 = sys.platform == "win32"
@@ -57,6 +60,22 @@ class SummaryResult:
     out_path: str
     eligible_count: int
     eligible_size: int
+
+
+@dataclass
+class SummaryStats:
+    """Bounded file samples and aggregate profile scan statistics."""
+
+    eligible_count: int = 0
+    eligible_size: int = 0
+    skipped_count: int = 0
+    skipped_size: int = 0
+    error_count: int = 0
+    folder_stats: dict[str, CountSize] = field(default_factory=dict)
+    extension_stats: dict[str, CountSize] = field(default_factory=dict)
+    skip_reasons: dict[str, CountSize] = field(default_factory=dict)
+    largest_eligible: list[tuple[int, str, str]] = field(default_factory=list)
+    largest_skipped: list[tuple[int, str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -345,198 +364,246 @@ def generate_full_profile_reports(
     return outputs
 
 
-def generate_summary(config_path: str, out_dir: str) -> SummaryResult:
-    config = load_config(config_path)
+def _add_aggregate(aggregates: dict[str, CountSize], key: str, size: int) -> None:
+    aggregate = aggregates.setdefault(key, {"count": 0, "size": 0})
+    aggregate["count"] += 1
+    aggregate["size"] += size
 
-    eligible: list[FileEntry] = []
-    skipped: list[FileEntry] = []
-    errors: list[FileEntry] = []
+
+def _push_largest(
+    heap: list[tuple[int, str, str]],
+    item: tuple[int, str, str],
+    limit: int,
+) -> None:
+    if len(heap) < limit:
+        heapq.heappush(heap, item)
+    elif item > heap[0]:
+        heapq.heapreplace(heap, item)
+
+
+def _collect_summary(config: Config, error_output: TextIO) -> SummaryStats:
+    stats = SummaryStats()
     for entry in scan(config):
         if entry.is_skipped:
             if "error" in entry.skip_reason:
-                errors.append(entry)
-            else:
-                skipped.append(entry)
-        else:
-            eligible.append(entry)
-
-    total_size = sum(f.size for f in eligible)
-    skipped_size = sum(f.size for f in skipped)
-
-    # --- Breakdown by root folder ---
-    folder_stats: dict[str, CountSize] = defaultdict(lambda: {"count": 0, "size": 0})
-    for f in eligible:
-        folder = _root_folder(f.relative_path)
-        folder_stats[folder]["count"] += 1
-        folder_stats[folder]["size"] += f.size
-
-    folder_rows = sorted(folder_stats.items(), key=lambda x: -x[1]["size"])
-
-    # --- Breakdown by extension ---
-    ext_stats: dict[str, CountSize] = defaultdict(lambda: {"count": 0, "size": 0})
-    for f in eligible:
-        ext = f.extension or "(no ext)"
-        ext_stats[ext]["count"] += 1
-        ext_stats[ext]["size"] += f.size
-
-    ext_rows = sorted(ext_stats.items(), key=lambda x: -x[1]["size"])
-
-    # --- Top 25 largest ---
-    top25 = sorted(eligible, key=lambda f: -f.size)[:25]
-
-    # --- Skipped breakdown ---
-    skip_reasons: dict[str, CountSize] = defaultdict(lambda: {"count": 0, "size": 0})
-    for f in skipped:
-        reason = f.skip_reason.split(" ")[0]
-        skip_reasons[reason]["count"] += 1
-        skip_reasons[reason]["size"] += f.size
-
-    # --- Build markdown ---
-    today = date.today().isoformat()
-    lines: list[str] = []
-
-    lines.append(f"# Profile Backup Summary ({today})")
-    lines.append("")
-    lines.append(f"**Date:** {today}  ")
-    lines.append(f"**Backup root:** `{config.backup_root}`  ")
-    lines.append(
-        f"**Total eligible for upload:** {human_size(total_size)} "
-        f"across {len(eligible):,} files  "
-    )
-    lines.append(
-        f"**Skipped by rules:** {len(skipped):,} files "
-        f"({human_size(skipped_size)})  "
-    )
-    lines.append(f"**Skipped by errors:** {len(errors)} files")
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-
-    # --- Breakdown by root folder ---
-    lines.append("## Breakdown by Root Folder")
-    lines.append("")
-    lines.append("| Folder | Files | Size | % of Total |")
-    lines.append("| ------ | ----: | ---: | ---------: |")
-
-    TOP_FOLDERS = 10
-    shown_folders = folder_rows[:TOP_FOLDERS]
-    other_folders = folder_rows[TOP_FOLDERS:]
-
-    for folder, data in shown_folders:
-        pct = (data["size"] / total_size * 100) if total_size else 0
-        pct_str = f"{pct:.1f}%" if pct >= 0.1 else "<0.1%"
-        lines.append(
-            f"| {folder} | {data['count']:,} | {human_size(data['size'])} | {pct_str} |"
-        )
-
-    if other_folders:
-        other_count = sum(d["count"] for _, d in other_folders)
-        other_size = sum(d["size"] for _, d in other_folders)
-        pct = (other_size / total_size * 100) if total_size else 0
-        pct_str = f"{pct:.1f}%" if pct >= 0.1 else "<0.1%"
-        lines.append(
-            f"| All other ({len(other_folders)} folders) | {other_count:,} "
-            f"| {human_size(other_size)} | {pct_str} |"
-        )
-
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-
-    # --- Breakdown by file type ---
-    lines.append("## Breakdown by File Type")
-    lines.append("")
-    lines.append("| Extension | Files | Size | % of Total |")
-    lines.append("| --------- | ----: | ---: | ---------: |")
-
-    TOP_EXTS = 17
-    shown_exts = ext_rows[:TOP_EXTS]
-    other_exts = ext_rows[TOP_EXTS:]
-
-    for ext, data in shown_exts:
-        pct = (data["size"] / total_size * 100) if total_size else 0
-        pct_str = f"{pct:.1f}%" if pct >= 0.1 else "<0.1%"
-        lines.append(
-            f"| {ext} | {data['count']:,} | {human_size(data['size'])} | {pct_str} |"
-        )
-
-    if other_exts:
-        other_count = sum(d["count"] for _, d in other_exts)
-        other_size = sum(d["size"] for _, d in other_exts)
-        pct = (other_size / total_size * 100) if total_size else 0
-        pct_str = f"~{pct:.1f}%" if pct >= 0.1 else "<0.1%"
-        lines.append(
-            f"| All other | ~{other_count:,} | ~{human_size(other_size)} | {pct_str} |"
-        )
-
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-
-    # --- Top 25 largest files ---
-    lines.append("## Top 25 Largest Files")
-    lines.append("")
-    lines.append("| # | Size | File |")
-    lines.append("| --: | -------: | ---- |")
-
-    for i, f in enumerate(top25, 1):
-        display = _shorten_path(f.relative_path)
-        lines.append(f"| {i} | {human_size(f.size)} | {display} |")
-
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-
-    # --- Skipped files ---
-    lines.append(f"## Skipped Files ({len(skipped)} files, {human_size(skipped_size)})")
-    lines.append("")
-
-    if skip_reasons:
-        lines.append("| Reason | Files | Size |")
-        lines.append("| ------ | ----: | ---: |")
-        for reason, data in sorted(skip_reasons.items(), key=lambda x: -x[1]["size"]):
-            lines.append(
-                f"| {reason} | {data['count']:,} | {human_size(data['size'])} |"
+                stats.error_count += 1
+                error_output.write(f"- `{entry.relative_path}`: {entry.skip_reason}\n")
+                continue
+            stats.skipped_count += 1
+            stats.skipped_size += entry.size
+            reason = entry.skip_reason.split(" ")[0]
+            _add_aggregate(stats.skip_reasons, reason, entry.size)
+            _push_largest(
+                stats.largest_skipped,
+                (entry.size, entry.relative_path, entry.skip_reason),
+                10,
             )
-        lines.append("")
+            continue
 
-    # Top 10 skipped by size
-    if skipped:
-        lines.append("**Top 10 skipped by size:**")
-        lines.append("")
-        lines.append("| File | Size | Reason |")
-        lines.append("| ---- | ---: | ------ |")
-        top_skipped = sorted(skipped, key=lambda f: -f.size)[:10]
-        for f in top_skipped:
-            display = _shorten_path(f.relative_path, 60)
-            lines.append(f"| {display} | {human_size(f.size)} | {f.skip_reason} |")
-        lines.append("")
+        stats.eligible_count += 1
+        stats.eligible_size += entry.size
+        _add_aggregate(
+            stats.folder_stats,
+            _root_folder(entry.relative_path),
+            entry.size,
+        )
+        _add_aggregate(
+            stats.extension_stats,
+            entry.extension or "(no ext)",
+            entry.size,
+        )
+        _push_largest(
+            stats.largest_eligible,
+            (entry.size, entry.relative_path, ""),
+            25,
+        )
+    return stats
 
-    lines.append("---")
-    lines.append("")
 
-    # --- Errors ---
-    lines.append(f"## Errors ({len(errors)} files)")
-    lines.append("")
-    if errors:
-        for f in errors:
-            lines.append(f"- `{f.relative_path}`: {f.skip_reason}")
+def _write_line(output: TextIO, line: str = "") -> None:
+    output.write(f"{line}\n")
+
+
+def _write_summary(
+    output: TextIO,
+    config: Config,
+    stats: SummaryStats,
+    error_input: TextIO,
+    report_date: date,
+) -> None:
+    today = report_date.isoformat()
+    folder_rows = sorted(stats.folder_stats.items(), key=lambda item: -item[1]["size"])
+    extension_rows = sorted(
+        stats.extension_stats.items(), key=lambda item: -item[1]["size"]
+    )
+    top_eligible = sorted(
+        stats.largest_eligible,
+        key=lambda item: (-item[0], item[1], item[2]),
+    )
+    top_skipped = sorted(
+        stats.largest_skipped,
+        key=lambda item: (-item[0], item[1], item[2]),
+    )
+
+    _write_line(output, f"# Profile Backup Summary ({today})")
+    _write_line(output)
+    _write_line(output, f"**Date:** {today}  ")
+    _write_line(output, f"**Backup root:** `{config.backup_root}`  ")
+    _write_line(
+        output,
+        f"**Total eligible for upload:** {human_size(stats.eligible_size)} "
+        f"across {stats.eligible_count:,} files  ",
+    )
+    _write_line(
+        output,
+        f"**Skipped by rules:** {stats.skipped_count:,} files "
+        f"({human_size(stats.skipped_size)})  ",
+    )
+    _write_line(output, f"**Skipped by errors:** {stats.error_count} files")
+    _write_line(output)
+    _write_line(output, "---")
+    _write_line(output)
+
+    _write_line(output, "## Breakdown by Root Folder")
+    _write_line(output)
+    _write_line(output, "| Folder | Files | Size | % of Total |")
+    _write_line(output, "| ------ | ----: | ---: | ---------: |")
+    shown_folders = folder_rows[:10]
+    other_folders = folder_rows[10:]
+    for folder, aggregate in shown_folders:
+        percentage = (
+            aggregate["size"] / stats.eligible_size * 100 if stats.eligible_size else 0
+        )
+        percentage_text = f"{percentage:.1f}%" if percentage >= 0.1 else "<0.1%"
+        _write_line(
+            output,
+            f"| {folder} | {aggregate['count']:,} | "
+            f"{human_size(aggregate['size'])} | {percentage_text} |",
+        )
+    if other_folders:
+        other_count = sum(item["count"] for _, item in other_folders)
+        other_size = sum(item["size"] for _, item in other_folders)
+        percentage = (
+            other_size / stats.eligible_size * 100 if stats.eligible_size else 0
+        )
+        percentage_text = f"{percentage:.1f}%" if percentage >= 0.1 else "<0.1%"
+        _write_line(
+            output,
+            f"| All other ({len(other_folders)} folders) | {other_count:,} "
+            f"| {human_size(other_size)} | {percentage_text} |",
+        )
+    _write_line(output)
+    _write_line(output, "---")
+    _write_line(output)
+
+    _write_line(output, "## Breakdown by File Type")
+    _write_line(output)
+    _write_line(output, "| Extension | Files | Size | % of Total |")
+    _write_line(output, "| --------- | ----: | ---: | ---------: |")
+    shown_extensions = extension_rows[:17]
+    other_extensions = extension_rows[17:]
+    for extension, aggregate in shown_extensions:
+        percentage = (
+            aggregate["size"] / stats.eligible_size * 100 if stats.eligible_size else 0
+        )
+        percentage_text = f"{percentage:.1f}%" if percentage >= 0.1 else "<0.1%"
+        _write_line(
+            output,
+            f"| {extension} | {aggregate['count']:,} | "
+            f"{human_size(aggregate['size'])} | {percentage_text} |",
+        )
+    if other_extensions:
+        other_count = sum(item["count"] for _, item in other_extensions)
+        other_size = sum(item["size"] for _, item in other_extensions)
+        percentage = (
+            other_size / stats.eligible_size * 100 if stats.eligible_size else 0
+        )
+        percentage_text = f"~{percentage:.1f}%" if percentage >= 0.1 else "<0.1%"
+        _write_line(
+            output,
+            f"| All other | ~{other_count:,} | ~{human_size(other_size)} "
+            f"| {percentage_text} |",
+        )
+    _write_line(output)
+    _write_line(output, "---")
+    _write_line(output)
+
+    _write_line(output, "## Top 25 Largest Files")
+    _write_line(output)
+    _write_line(output, "| # | Size | File |")
+    _write_line(output, "| --: | -------: | ---- |")
+    for index, (size, relative_path, _) in enumerate(top_eligible, 1):
+        _write_line(
+            output,
+            f"| {index} | {human_size(size)} | {_shorten_path(relative_path)} |",
+        )
+    _write_line(output)
+    _write_line(output, "---")
+    _write_line(output)
+
+    _write_line(
+        output,
+        f"## Skipped Files ({stats.skipped_count} files, "
+        f"{human_size(stats.skipped_size)})",
+    )
+    _write_line(output)
+    if stats.skip_reasons:
+        _write_line(output, "| Reason | Files | Size |")
+        _write_line(output, "| ------ | ----: | ---: |")
+        for reason, aggregate in sorted(
+            stats.skip_reasons.items(),
+            key=lambda item: -item[1]["size"],
+        ):
+            _write_line(
+                output,
+                f"| {reason} | {aggregate['count']:,} | "
+                f"{human_size(aggregate['size'])} |",
+            )
+        _write_line(output)
+    if top_skipped:
+        _write_line(output, "**Top 10 skipped by size:**")
+        _write_line(output)
+        _write_line(output, "| File | Size | Reason |")
+        _write_line(output, "| ---- | ---: | ------ |")
+        for size, relative_path, reason in top_skipped:
+            _write_line(
+                output,
+                f"| {_shorten_path(relative_path, 60)} | "
+                f"{human_size(size)} | {reason} |",
+            )
+        _write_line(output)
+    _write_line(output, "---")
+    _write_line(output)
+
+    _write_line(output, f"## Errors ({stats.error_count} files)")
+    _write_line(output)
+    if stats.error_count:
+        error_input.seek(0)
+        shutil.copyfileobj(error_input, output, length=65_536)
     else:
-        lines.append("No errors.")
-    lines.append("")
+        _write_line(output, "No errors.")
 
-    # --- Write file ---
-    md_content = "\n".join(lines)
+
+def generate_summary(config_path: str, out_dir: str) -> SummaryResult:
+    config = load_config(config_path)
+    today = date.today()
     os.makedirs(out_dir, exist_ok=True)
-    filename = f"profile-summary-{today}.md"
-    out_path = os.path.join(out_dir, filename)
-    with open(out_path, "w", encoding="utf-8") as fout:
-        fout.write(md_content)
+    out_path = os.path.join(out_dir, f"profile-summary-{today.isoformat()}.md")
+
+    with tempfile.SpooledTemporaryFile(
+        mode="w+",
+        max_size=1_048_576,
+        encoding="utf-8",
+    ) as errors:
+        error_stream = cast(TextIO, errors)
+        stats = _collect_summary(config, error_stream)
+        with open(out_path, "w", encoding="utf-8") as output:
+            _write_summary(output, config, stats, error_stream, today)
 
     return SummaryResult(
         out_path=out_path,
-        eligible_count=len(eligible),
-        eligible_size=total_size,
+        eligible_count=stats.eligible_count,
+        eligible_size=stats.eligible_size,
     )
 
 

@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rich.console import Console
 
+    from drive_backup.engine import ProgressEvent
+    from drive_backup.report import BackupReport
     from drive_backup.scanner import FileEntry
 
 
@@ -71,7 +73,8 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     from drive_backup.config import load_config
-    from drive_backup.engine import BackupEngine
+    from drive_backup.dedup import ManifestLoadError
+    from drive_backup.engine import BackupEngine, ProgressKind
 
     console = Console()
 
@@ -108,23 +111,28 @@ def main(argv: list[str] | None = None) -> None:
 
     scan_task = None
 
-    def progress_callback(file: FileEntry, action: str) -> None:
+    def progress_callback(file: FileEntry, event: ProgressEvent) -> None:
         if scan_task is not None:
             progress.advance(scan_task)
-        if action.startswith("uploaded:") or action.startswith("would_upload:"):
+        if event.kind in (ProgressKind.UPLOADED, ProgressKind.WOULD_UPLOAD):
             if args.verbose:
-                tag = "UPLOAD" if action.startswith("uploaded:") else "WOULD UPLOAD"
+                tag = (
+                    "UPLOAD" if event.kind is ProgressKind.UPLOADED else "WOULD UPLOAD"
+                )
                 console.print(f"  [{tag}] {file.relative_path} ({file.size_human})")
-        elif args.verbose and action == "skipped":
+        elif args.verbose and event.kind is ProgressKind.SKIPPED:
             console.print(f"  [SKIP] {file.relative_path} — {file.skip_reason}")
 
-    # Run backup
-    with progress:
-        scan_task = progress.add_task(
-            "Backing up..." if not args.dry_run else "Scanning (dry run)...",
-            total=None,
-        )
-        report = engine.run(progress_callback=progress_callback)
+    try:
+        with progress:
+            scan_task = progress.add_task(
+                "Backing up..." if not args.dry_run else "Scanning (dry run)...",
+                total=None,
+            )
+            report = engine.run(progress_callback=progress_callback)
+    except ManifestLoadError as error:
+        console.print(f"[red]Backup failed:[/] {error}")
+        raise SystemExit(1) from error
 
     # Print summary
     console.print()
@@ -132,7 +140,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _print_summary(
-    console: Console, report: dict[str, Any], *, verbose: bool = False
+    console: Console, report: BackupReport, *, verbose: bool = False
 ) -> None:
     """Print a formatted summary table."""
     from rich.table import Table

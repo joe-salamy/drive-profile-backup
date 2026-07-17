@@ -8,6 +8,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from drive_backup.drive_api import DriveAPI, RateLimiter, _escape_drive_query_value
+from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
+
+
+def _http_error(status: int) -> HttpError:
+    response = MagicMock(status=status, reason="test error")
+    return HttpError(response, b"{}")
 
 
 class TestRateLimiter:
@@ -57,6 +63,73 @@ class TestDriveAPI:
         result2 = api.get_or_create_folder("test", "parent_id")
         assert result2 == "folder_123"
         mock_service.files().list.assert_not_called()
+
+    def test_folder_lookup_retries_and_caches_success(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json",
+            token_path="token.json",
+            max_retries=2,
+        )
+        mock_service = MagicMock()
+        execute = mock_service.files.return_value.list.return_value.execute
+        execute.side_effect = [
+            _http_error(503),
+            {"files": [{"id": "folder_123", "name": "test"}]},
+        ]
+        api._service = mock_service
+        api._rate_limiter = MagicMock()
+        monkeypatch.setattr("drive_backup.drive_api.time.sleep", MagicMock())
+
+        assert api.get_or_create_folder("test", "parent_id") == "folder_123"
+        assert execute.call_count == 2
+        assert api._folder_cache[("test", "parent_id")] == "folder_123"
+        api._rate_limiter.wait.assert_not_called()
+
+        execute.reset_mock()
+        assert api.get_or_create_folder("test", "parent_id") == "folder_123"
+        execute.assert_not_called()
+
+    def test_folder_lookup_does_not_retry_non_retryable_error(self) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json",
+            token_path="token.json",
+            max_retries=2,
+        )
+        mock_service = MagicMock()
+        execute = mock_service.files.return_value.list.return_value.execute
+        execute.side_effect = _http_error(404)
+        api._service = mock_service
+
+        with pytest.raises(HttpError):
+            api.get_or_create_folder("test", "parent_id")
+
+        execute.assert_called_once()
+        assert ("test", "parent_id") not in api._folder_cache
+
+    def test_folder_create_throttles_every_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json",
+            token_path="token.json",
+            max_retries=2,
+        )
+        mock_service = MagicMock()
+        mock_service.files.return_value.list.return_value.execute.return_value = {
+            "files": []
+        }
+        create_execute = mock_service.files.return_value.create.return_value.execute
+        create_execute.side_effect = [_http_error(503), {"id": "new_folder"}]
+        api._service = mock_service
+        api._rate_limiter = MagicMock()
+        monkeypatch.setattr("drive_backup.drive_api.time.sleep", MagicMock())
+
+        assert api.get_or_create_folder("test") == "new_folder"
+        assert create_execute.call_count == 2
+        assert api._rate_limiter.wait.call_count == 2
+        assert api._folder_cache[("test", None)] == "new_folder"
 
     def test_ensure_folder_path(self) -> None:
         api = DriveAPI(credentials_path="creds.json", token_path="token.json")

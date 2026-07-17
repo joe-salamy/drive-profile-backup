@@ -11,11 +11,13 @@ import pytest
 
 from drive_backup.cli import _print_summary, main
 from drive_backup.config import Config
+from drive_backup.engine import ProgressEvent, ProgressKind
+from drive_backup.report import BackupReport
 from drive_backup.utils import human_size
 
 
-def _minimal_report(**overrides: object) -> dict[str, object]:
-    report: dict[str, object] = {
+def _minimal_report(**overrides: object) -> BackupReport:
+    report = {
         "dry_run": True,
         "duration_human": "0s",
         "files_scanned": 1,
@@ -37,7 +39,7 @@ def _minimal_report(**overrides: object) -> dict[str, object]:
         "prune_error_files": [],
     }
     report.update(overrides)
-    return report
+    return report  # type: ignore[return-value]
 
 
 class TestCliHumanSize:
@@ -98,11 +100,16 @@ class TestCliMain:
                 assert prune is False
 
             def run(
-                self, *, progress_callback: Callable[[object, str], None]
-            ) -> dict[str, object]:
+                self,
+                *,
+                progress_callback: Callable[[object, ProgressEvent], None],
+            ) -> BackupReport:
                 assert "progress_enter" in events
                 events.append("engine_run")
-                progress_callback(object(), "would_upload:test.txt")
+                progress_callback(
+                    object(),
+                    ProgressEvent(ProgressKind.WOULD_UPLOAD, "test.txt"),
+                )
                 return _minimal_report()
 
         def fail_if_scanned_before_progress(config: Config) -> object:
@@ -179,6 +186,29 @@ class TestCliMain:
         monkeypatch.chdir(tmp_path)
         main(["--dry-run"])
 
+    def test_manifest_failure_is_concise(
+        self,
+        tmp_path: Path,
+        monkeypatch: "pytest.MonkeyPatch",
+        capsys: "pytest.CaptureFixture[str]",
+    ) -> None:
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text('{"version": 2, "files": {}}', encoding="utf-8")
+        (tmp_path / "config.yaml").write_text(
+            "profile_name: laptop-a\n"
+            f"backup_root: {tmp_path}\n"
+            "exclude_dirs: []\n"
+            "exclude_files: []\n"
+            f"manifest_path: {manifest_path}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit, match="1"):
+            main([])
+
+        assert "Backup failed:" in capsys.readouterr().out
+
     def test_verbose_dry_run(
         self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
     ) -> None:
@@ -215,8 +245,10 @@ class TestCliMain:
                 captured["prune"] = prune
 
             def run(
-                self, *, progress_callback: Callable[[object, str], None]
-            ) -> dict[str, object]:
+                self,
+                *,
+                progress_callback: Callable[[object, ProgressEvent], None],
+            ) -> BackupReport:
                 return _minimal_report(dry_run=True, prune_enabled=True)
 
         monkeypatch.setattr("drive_backup.config.load_config", lambda path: config)
