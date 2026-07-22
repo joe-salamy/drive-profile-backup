@@ -164,7 +164,7 @@ class Manifest:
 
         _atomic_write_json(path, data)
 
-        logger.info("Manifest saved: %d entries -> %s", len(self.entries), path)
+        logger.debug("Manifest saved: %d entries -> %s", len(self.entries), path)
 
     def get(self, relative_path: str) -> ManifestEntry | None:
         """Look up a file by its relative path."""
