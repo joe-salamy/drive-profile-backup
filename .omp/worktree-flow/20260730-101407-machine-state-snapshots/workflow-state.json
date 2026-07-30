@@ -1,0 +1,14 @@
+{
+  "audit_head_before": "27a8d47c268c029ad603cbb7292c6719a06ecc88",
+  "base": "main",
+  "completed_stage": "cleanup_complete",
+  "feature_branch": "feature/machine-state-snapshots",
+  "feature_worktree": "/mnt/c/Users/joesa/code/drive-profile-backup-machine-state-snapshots",
+  "integration_branch": "integration/machine-state-snapshots-20260730-104133",
+  "integration_worktree": "/mnt/c/Users/joesa/code/drive-profile-backup-integrate-machine-state-snapshots-20260730-104133",
+  "merge_mode": "squash",
+  "plan_path": "/mnt/c/Users/joesa/code/drive-profile-backup-machine-state-snapshots/.omp/worktree-flow/20260730-101407-machine-state-snapshots/plan.md",
+  "plan_title": "Machine State Snapshots",
+  "run_id": "20260730-101407-machine-state-snapshots",
+  "slug": "machine-state-snapshots"
+}
