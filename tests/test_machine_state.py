@@ -361,3 +361,20 @@ def test_resolved_shim_uses_fixed_powershell_wrapper_and_raw_arguments() -> None
         *arguments,
     ]
     assert timeout == 120
+
+
+def test_resolved_shim_translates_wsl_wrapper_path_for_powershell() -> None:
+    runner = FakeRunner(lambda argv, timeout: completed(argv))
+
+    run_resolved_tool(
+        "/mnt/c/Tools/npm.cmd",
+        [],
+        timeout=120,
+        runner=runner,
+        powershell_executable="powershell.exe",
+        wrapper_path="/mnt/c/Users/test/_machine_state/wrapper.ps1",
+    )
+
+    argv, _ = runner.calls[0]
+    assert argv[5] == "C:\\Users\\test\\_machine_state\\wrapper.ps1"
+    assert argv[6] == "C:\\Tools\\npm.cmd"

@@ -69,6 +69,17 @@ def run_command(
     )
 
 
+def _windows_path_for_powershell(path: str) -> str:
+    """Translate a WSL-mounted drive path for a Windows process."""
+    normalized = path.replace("\\", "/")
+    parts = normalized.split("/")
+    if len(parts) >= 4 and parts[0] == "" and parts[1] == "mnt":
+        drive = parts[2]
+        if len(drive) == 1 and drive.isalpha():
+            return f"{drive.upper()}:\\" + "\\".join(parts[3:])
+    return path
+
+
 def run_resolved_tool(
     executable: str,
     args: Sequence[str],
@@ -87,8 +98,8 @@ def run_resolved_tool(
             "-NoProfile",
             "-NonInteractive",
             "-File",
-            wrapper_path,
-            executable,
+            _windows_path_for_powershell(wrapper_path),
+            _windows_path_for_powershell(executable),
             *args,
         ]
     else:
@@ -271,19 +282,40 @@ _WINDOWS_APPS_SCRIPT = r"""$paths = @(
 'Registry::HKEY_CURRENT_USER\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
 )
 [PSCustomObject]@{
-DesktopApplications = @($paths | ForEach-Object { Get-ItemProperty -Path $_ -ErrorAction SilentlyContinue })
-AppxPackages = @(Get-AppxPackage)
+DesktopApplications = @($paths | ForEach-Object {
+    Get-ItemProperty -Path $_ -ErrorAction SilentlyContinue |
+        Select-Object DisplayName, DisplayVersion, Publisher, InstallDate,
+            InstallLocation, UninstallString, QuietUninstallString,
+            WindowsInstaller, SystemComponent
+})
+AppxPackages = @(Get-AppxPackage |
+    Select-Object Name, PackageFullName, Version, Architecture, Publisher,
+        InstallLocation, IsFramework, SignatureKind, Status, NonRemovable)
 }"""
-
-_SERVICES_SCRIPT = "Get-CimInstance Win32_Service"
-_SCHEDULED_TASKS_SCRIPT = "Get-ScheduledTask"
-_DRIVERS_SCRIPT = "Get-CimInstance Win32_PnPSignedDriver"
+_SERVICES_SCRIPT = (
+    "Get-CimInstance Win32_Service | "
+    "Select-Object Name, DisplayName, State, StartMode, StartName, PathName, "
+    "Description, ProcessId, ServiceType"
+)
+_SCHEDULED_TASKS_SCRIPT = (
+    "Get-ScheduledTask | "
+    "Select-Object TaskPath, TaskName, State, Author, Description, URI, Source, "
+    "Actions, Triggers, Principal, Settings"
+)
+_DRIVERS_SCRIPT = (
+    "Get-CimInstance Win32_PnPSignedDriver | "
+    "Select-Object DeviceName, DeviceClass, Manufacturer, DriverProviderName, "
+    "DriverVersion, DriverDate, InfName, IsSigned, Signer, Status"
+)
 _ENVIRONMENT_SCRIPT = """[PSCustomObject]@{
 Process = [Environment]::GetEnvironmentVariables('Process')
 User = [Environment]::GetEnvironmentVariables('User')
 Machine = [Environment]::GetEnvironmentVariables('Machine')
 }"""
-_MODULES_SCRIPT = "Get-Module -ListAvailable"
+_MODULES_SCRIPT = (
+    "Get-Module -ListAvailable | "
+    "Select-Object Name, Version, Path, ModuleType, Guid, CompanyName, Description"
+)
 
 
 def _collect_windows_features(
@@ -309,11 +341,22 @@ def _collect_network(
 ) -> CollectorResult:
     del wrapper_path
     script = """[PSCustomObject]@{
-Adapters = @(Get-NetAdapter)
-IPConfiguration = @(Get-NetIPConfiguration -Detailed)
-Routes = @(Get-NetRoute)
-DnsServers = @(Get-DnsClientServerAddress)
-FirewallProfiles = @(Get-NetFirewallProfile)
+Adapters = @(Get-NetAdapter |
+    Select-Object Name, InterfaceDescription, Status, MacAddress, LinkSpeed,
+        MediaType, PhysicalMediaType, Virtual)
+IPConfiguration = @(Get-NetIPConfiguration -Detailed |
+    Select-Object InterfaceAlias, InterfaceIndex, InterfaceDescription,
+        NetProfile, IPv4Address, IPv6Address, IPv4DefaultGateway,
+        IPv6DefaultGateway, DNSServer)
+Routes = @(Get-NetRoute |
+    Select-Object DestinationPrefix, NextHop, RouteMetric, InterfaceIndex,
+        InterfaceAlias, AddressFamily, State)
+DnsServers = @(Get-DnsClientServerAddress |
+    Select-Object InterfaceAlias, InterfaceIndex, AddressFamily, ServerAddresses)
+FirewallProfiles = @(Get-NetFirewallProfile |
+    Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction,
+        AllowInboundRules, AllowLocalFirewallRules, AllowLocalIPsecRules,
+        NotifyOnListen)
 }"""
     powershell_data, warning = _powershell_json(powershell, script, "network", runner)
     warnings = [warning] if warning is not None else []
@@ -381,14 +424,16 @@ def _collect_package_managers(
     else:
         export_path: str | None = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as temporary:
+            with tempfile.NamedTemporaryFile(
+                suffix=".json", dir=Path(wrapper_path).parent, delete=False
+            ) as temporary:
                 export_path = temporary.name
             row, warning = _command_row(
                 winget,
                 [
                     "export",
                     "--output",
-                    export_path,
+                    _windows_path_for_powershell(export_path),
                     "--include-versions",
                     "--accept-source-agreements",
                     "--disable-interactivity",
@@ -629,8 +674,8 @@ def _collect_wsl(
                 "-NoProfile",
                 "-NonInteractive",
                 "-File",
-                list_wrapper_path,
-                wsl,
+                _windows_path_for_powershell(list_wrapper_path),
+                _windows_path_for_powershell(wsl),
             ],
             timeout=COMMAND_TIMEOUT,
             runner=runner,
