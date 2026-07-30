@@ -11,6 +11,19 @@ from typing import Any
 import yaml
 
 DEFAULT_MANIFEST_PATH = "~/.drive-backup/manifest.json"
+MACHINE_STATE_COLLECTORS = (
+    "system",
+    "windows_apps",
+    "package_managers",
+    "developer_tools",
+    "windows_features",
+    "services",
+    "scheduled_tasks",
+    "drivers",
+    "network",
+    "environment",
+    "wsl",
+)
 
 
 @dataclass
@@ -128,6 +141,9 @@ class Config:
     resumable_threshold_mb: float = 5
     max_retries: int = 3
     writes_per_second: float = 2.5
+    machine_state_collectors: list[str] = field(
+        default_factory=lambda: list(MACHINE_STATE_COLLECTORS)
+    )
 
     def __post_init__(self) -> None:
         if not self.backup_root:
@@ -217,6 +233,7 @@ _STRING_LIST_FIELDS = {
     "exclude_path_patterns",
     "exclude_specific_files",
     "no_size_limit",
+    "machine_state_collectors",
 }
 _NUMBER_FIELDS = {
     "max_file_size_mb",
@@ -284,6 +301,23 @@ def _validate_config_values(data: Any) -> dict[str, Any]:
             values[field_name] = {
                 key: _finite_number(limit, field_name) for key, limit in value.items()
             }
+    collectors = values.get("machine_state_collectors")
+    if collectors is not None:
+        unknown = sorted(set(collectors) - set(MACHINE_STATE_COLLECTORS))
+        duplicates = sorted(
+            name for name in set(collectors) if collectors.count(name) > 1
+        )
+        if unknown or duplicates:
+            problems = []
+            if unknown:
+                problems.append(f"unknown names: {', '.join(unknown)}")
+            if duplicates:
+                problems.append(f"duplicate names: {', '.join(duplicates)}")
+            valid = ", ".join(MACHINE_STATE_COLLECTORS)
+            raise ValueError(
+                "Invalid configuration value for 'machine_state_collectors': "
+                f"{'; '.join(problems)}; valid collectors: {valid}"
+            )
     return values
 
 

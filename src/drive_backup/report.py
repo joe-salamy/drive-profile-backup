@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TypedDict
 
+from drive_backup.machine_state import CollectorOutcome
 from drive_backup.utils import human_size
 
 
@@ -53,6 +54,14 @@ class ExtensionBreakdownRow(TypedDict):
     size_human: str
 
 
+class MachineStateCollectorRow(TypedDict):
+    name: str
+    status: str
+    output_file: str | None
+    warnings: list[str]
+    previous_output_retained: bool
+
+
 class BackupReport(TypedDict):
     backup_timestamp: str
     duration_seconds: float
@@ -86,6 +95,8 @@ class BackupReport(TypedDict):
     extension_breakdown: list[ExtensionBreakdownRow]
     error_files: list[ErrorFileRow]
     excluded_directories_count: int
+    machine_state_refreshed: bool
+    machine_state_collectors: list[MachineStateCollectorRow]
 
 
 @dataclass
@@ -169,6 +180,8 @@ class BackupStats:
     prune_skipped_reason: str = ""
     pruned_files: list[PrunedFile] = field(default_factory=list)
     prune_error_files: list[PruneError] = field(default_factory=list)
+    machine_state_refreshed: bool = False
+    machine_state_collectors: list[CollectorOutcome] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -287,6 +300,17 @@ def generate_report(stats: BackupStats) -> BackupReport:
             for ef in stats.error_files
         ],
         "excluded_directories_count": len(stats.excluded_directories),
+        "machine_state_refreshed": stats.machine_state_refreshed,
+        "machine_state_collectors": [
+            {
+                "name": outcome.name,
+                "status": outcome.status.value,
+                "output_file": outcome.output_file,
+                "warnings": list(outcome.warnings),
+                "previous_output_retained": outcome.previous_output_retained,
+            }
+            for outcome in stats.machine_state_collectors
+        ],
     }
 
 

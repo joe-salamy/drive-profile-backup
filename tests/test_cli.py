@@ -37,6 +37,8 @@ def _minimal_report(**overrides: object) -> BackupReport:
         "pruned_files": [],
         "prune_skipped_reason": "",
         "prune_error_files": [],
+        "machine_state_refreshed": False,
+        "machine_state_collectors": [],
     }
     report.update(overrides)
     return report  # type: ignore[return-value]
@@ -93,11 +95,18 @@ class TestCliMain:
 
         class FakeBackupEngine:
             def __init__(
-                self, config: Config, *, dry_run: bool, full: bool, prune: bool
+                self,
+                config: Config,
+                *,
+                dry_run: bool,
+                full: bool,
+                prune: bool,
+                collect_machine_state_snapshot: bool,
             ) -> None:
                 assert dry_run is True
                 assert full is False
                 assert prune is False
+                assert collect_machine_state_snapshot is True
 
             def run(
                 self,
@@ -184,7 +193,7 @@ class TestCliMain:
         )
 
         monkeypatch.chdir(tmp_path)
-        main(["--dry-run"])
+        main(["--dry-run", "--skip-machine-state"])
 
     def test_manifest_failure_is_concise(
         self,
@@ -222,10 +231,29 @@ class TestCliMain:
         )
 
         monkeypatch.chdir(tmp_path)
-        main(["--dry-run", "--verbose"])
+        main(["--dry-run", "--verbose", "--skip-machine-state"])
 
+    def test_help_includes_skip_machine_state(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit, match="0"):
+            main(["--help"])
+
+        assert (
+            "Do not refresh generated machine-state inventories before this backup"
+            in " ".join(capsys.readouterr().out.split())
+        )
+
+    @pytest.mark.parametrize(
+        ("extra_args", "expected_collection"),
+        [([], True), (["--skip-machine-state"], False)],
+    )
     def test_prune_flag_is_passed_to_engine(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self,
+        tmp_path: Path,
+        monkeypatch: "pytest.MonkeyPatch",
+        extra_args: list[str],
+        expected_collection: bool,
     ) -> None:
         captured: dict[str, bool] = {}
         config = Config(
@@ -238,11 +266,20 @@ class TestCliMain:
 
         class FakeBackupEngine:
             def __init__(
-                self, config: Config, *, dry_run: bool, full: bool, prune: bool
+                self,
+                config: Config,
+                *,
+                dry_run: bool,
+                full: bool,
+                prune: bool,
+                collect_machine_state_snapshot: bool,
             ) -> None:
                 captured["dry_run"] = dry_run
                 captured["full"] = full
                 captured["prune"] = prune
+                captured["collect_machine_state_snapshot"] = (
+                    collect_machine_state_snapshot
+                )
 
             def run(
                 self,
@@ -254,9 +291,14 @@ class TestCliMain:
         monkeypatch.setattr("drive_backup.config.load_config", lambda path: config)
         monkeypatch.setattr("drive_backup.engine.BackupEngine", FakeBackupEngine)
 
-        main(["--dry-run", "--prune"])
+        main(["--dry-run", "--prune", *extra_args])
 
-        assert captured == {"dry_run": True, "full": False, "prune": True}
+        assert captured == {
+            "dry_run": True,
+            "full": False,
+            "prune": True,
+            "collect_machine_state_snapshot": expected_collection,
+        }
 
     def test_verbose_prune_lists_all_would_prune_files(self) -> None:
         from rich.console import Console
@@ -333,3 +375,42 @@ class TestCliMain:
 
         assert expected_files_label in output
         assert expected_size_label in output
+
+
+def test_print_summary_includes_machine_state_counts_and_warnings() -> None:
+    from rich.console import Console
+
+    console = Console(record=True, width=120)
+    report = _minimal_report(
+        machine_state_refreshed=True,
+        machine_state_collectors=[
+            {
+                "name": "system",
+                "status": "succeeded",
+                "output_file": "_machine_state/system.json",
+                "warnings": [],
+                "previous_output_retained": False,
+            },
+            {
+                "name": "wsl",
+                "status": "partial",
+                "output_file": "_machine_state/wsl.json",
+                "warnings": ["one distro failed"],
+                "previous_output_retained": False,
+            },
+            {
+                "name": "services",
+                "status": "failed",
+                "output_file": None,
+                "warnings": ["access denied"],
+                "previous_output_retained": False,
+            },
+        ],
+    )
+
+    _print_summary(console, report)
+    output = console.export_text()
+
+    assert "1 succeeded, 1 partial, 1 failed" in output
+    assert "wsl: one distro failed" in output
+    assert "services: access denied" in output

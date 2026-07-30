@@ -1,6 +1,6 @@
 # drive-profile-backup
 
-Windows-focused Python CLI for incremental Google Drive backups of a user profile. `drive-backup` scans a configured profile root, applies exclusions and size limits, skips unchanged files with a manifest-backed mtime/size/MD5 check, uploads changed files to Google Drive, and writes JSON backup reports.
+Windows-focused Python CLI for incremental Google Drive backups of a user profile. `drive-backup` refreshes restore-oriented Windows and WSL machine-state inventories, scans the configured profile root, applies exclusions and size limits, skips unchanged files with a manifest-backed mtime/size/MD5 check, uploads changed files to Google Drive, and writes JSON backup reports.
 
 ## Prerequisites
 
@@ -27,6 +27,7 @@ Edit `config.yaml` before running a backup:
 - `drive_parent_folder_name`: parent folder in Google Drive.
 - `credentials_path`: local OAuth client JSON path; default is `credentials.json`.
 - `token_path`: local OAuth token path; default is `~/.drive-backup/token.json`.
+- `machine_state_collectors`: ordered list of generated Windows/WSL inventories to refresh; the example lists every supported collector.
 
 ## Run
 
@@ -36,14 +37,20 @@ drive-backup
 drive-backup --full
 drive-backup --prune
 drive-backup --verbose
+drive-backup --skip-machine-state
 ```
 
 Flags:
 
-- `--dry-run`: scan and report without uploading or pruning.
+- `--dry-run`: refresh local machine-state inventories, then scan and report without uploading or pruning. Combine with `--skip-machine-state` for a no-refresh preview.
 - `--full`: ignore the manifest and upload every eligible file.
 - `--prune`: move stale Drive files to trash when their manifest entries no longer exist locally.
 - `--verbose`: print per-file actions and DEBUG logs.
+- `--skip-machine-state`: do not refresh generated inventories. Existing snapshots remain eligible for ordinary scan, deduplication, and upload.
+
+Machine-state refresh is default-on. Generated JSON files live under `<backup_root>/_machine_state/`, are scanned and uploaded under the Drive profile like ordinary files, and obey all configured scanner exclusions and size limits. Collector failures warn and continue the ordinary backup; a failed collector retains its prior local output when possible and protects its prior remote manifest entry from pruning. WSL collection may start every registered distribution, including stopped distributions.
+
+Machine-state outputs intentionally contain unredacted diagnostics. Environment values can include API keys and other secrets; inventories can also contain network addresses, usernames, domains, serial numbers, package sources, service accounts/paths, and scheduled-task arguments. The feature inventories state only and does not copy arbitrary credential or configuration files from outside `backup_root`.
 
 Files upload under `drive_parent_folder_name/profile_name/` and reports go under that Drive profile folder's `_reports` folder. Local profile-mode state defaults to `~/.drive-backup/profiles/<profile_name>/manifest.json` unless `manifest_path` is set.
 

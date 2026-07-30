@@ -7,48 +7,17 @@ import json
 import logging
 import math
 import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 from drive_backup.scanner import FileEntry
+from drive_backup.utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 8192
-
-
-def _atomic_write_json(path: str, data: dict[str, object]) -> None:
-    """Atomically write JSON data to path using a same-directory temp file."""
-    path = os.path.expanduser(path)
-    parent = os.path.dirname(path) or "."
-    basename = os.path.basename(path)
-    os.makedirs(parent, exist_ok=True)
-
-    temp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=parent,
-            prefix=f".{basename}.",
-            suffix=".tmp",
-            delete=False,
-        ) as tmp:
-            temp_path = tmp.name
-            json.dump(data, tmp, indent=2)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        os.replace(temp_path, path)
-        temp_path = None
-    finally:
-        if temp_path is not None:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
 
 
 @dataclass
@@ -162,7 +131,7 @@ class Manifest:
             },
         }
 
-        _atomic_write_json(path, data)
+        atomic_write_json(path, data)
 
         logger.debug("Manifest saved: %d entries -> %s", len(self.entries), path)
 

@@ -111,6 +111,20 @@ no_size_limit:
   - ".aac"
   - ".ogg"
 
+# Generated machine-state inventories refreshed before each backup
+machine_state_collectors:
+  - "system"
+  - "windows_apps"
+  - "package_managers"
+  - "developer_tools"
+  - "windows_features"
+  - "services"
+  - "scheduled_tasks"
+  - "drivers"
+  - "network"
+  - "environment"
+  - "wsl"
+
 # Google Drive settings
 # Required: set profile_name on each laptop to keep backups separate under one account.
 # Example: "thinkpad" on one laptop, "surface" on another.

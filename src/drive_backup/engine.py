@@ -14,6 +14,12 @@ from typing import TYPE_CHECKING
 
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, ManifestEntry, compute_md5, needs_upload
+from drive_backup.machine_state import (
+    MACHINE_STATE_DIRECTORY,
+    CollectorOutcome,
+    CollectorStatus,
+    collect_machine_state,
+)
 from drive_backup.report import (
     BackupReport,
     BackupStats,
@@ -61,11 +67,13 @@ class BackupEngine:
         dry_run: bool = False,
         full: bool = False,
         prune: bool = False,
+        collect_machine_state_snapshot: bool = True,
     ) -> None:
         self.config = config
         self.dry_run = dry_run
         self.full = full  # Ignore manifest, re-upload everything
         self.prune = prune
+        self.collect_machine_state_snapshot = collect_machine_state_snapshot
         self.stats = BackupStats(
             backup_root=config.backup_root,
             dry_run=dry_run,
@@ -75,6 +83,7 @@ class BackupEngine:
         self.manifest = Manifest()
         self.drive: DriveAPI | None = None  # Lazy: imported only when needed
         self._root_folder_id: str = ""
+        self._prune_protected_paths: set[str] = set()
 
     def run(
         self,
@@ -87,6 +96,7 @@ class BackupEngine:
                 called for each file processed. Used by CLI for progress display.
         """
         self.stats.start_time = time.time()
+        backup_root_available = os.path.isdir(self.config.backup_root)
 
         # Load manifest (unless --full forces re-upload)
         if not self.full:
@@ -96,6 +106,54 @@ class BackupEngine:
             )
         else:
             logger.info("Full mode: ignoring manifest, will re-upload everything")
+
+        if self.collect_machine_state_snapshot and backup_root_available:
+            self.stats.machine_state_refreshed = True
+            try:
+                self.stats.machine_state_collectors = collect_machine_state(
+                    self.config.backup_root, self.config.machine_state_collectors
+                )
+            except Exception as error:
+                warning = f"Unexpected machine-state refresh failure: {error}"
+                logger.warning(warning)
+                failed_names = [*self.config.machine_state_collectors, "snapshot"]
+                self.stats.machine_state_collectors = []
+                for name in failed_names:
+                    filename = "snapshot.json" if name == "snapshot" else f"{name}.json"
+                    relative_path = f"{MACHINE_STATE_DIRECTORY}/{filename}"
+                    retained = os.path.isfile(
+                        os.path.join(self.config.backup_root, *relative_path.split("/"))
+                    )
+                    self.stats.machine_state_collectors.append(
+                        CollectorOutcome(
+                            name=name,
+                            status=CollectorStatus.FAILED,
+                            output_file=relative_path if retained else None,
+                            warnings=(warning,),
+                            previous_output_retained=retained,
+                        )
+                    )
+        elif self.collect_machine_state_snapshot:
+            self.stats.machine_state_collectors = [
+                CollectorOutcome(
+                    name="snapshot",
+                    status=CollectorStatus.FAILED,
+                    output_file=None,
+                    warnings=(
+                        "Backup root is unavailable; machine-state refresh skipped",
+                    ),
+                    previous_output_retained=False,
+                )
+            ]
+
+        for outcome in self.stats.machine_state_collectors:
+            if outcome.status is CollectorStatus.FAILED:
+                filename = (
+                    "snapshot.json"
+                    if outcome.name == "snapshot"
+                    else f"{outcome.name}.json"
+                )
+                self._prune_protected_paths.add(f"{MACHINE_STATE_DIRECTORY}/{filename}")
 
         # Authenticate to Drive (unless dry-run)
         if not self.dry_run:
@@ -124,7 +182,7 @@ class BackupEngine:
                 self.stats.prune_skipped_reason = (
                     "Skipped prune because --full ignores the manifest"
                 )
-            elif not os.path.isdir(self.config.backup_root):
+            elif not backup_root_available:
                 self.stats.prune_skipped_reason = (
                     "Skipped prune because backup root is unavailable"
                 )
@@ -302,7 +360,8 @@ class BackupEngine:
         return [
             (rel_path, entry)
             for rel_path, entry in sorted(self.manifest.entries.items())
-            if not self._manifest_key_exists_locally(rel_path)
+            if rel_path not in self._prune_protected_paths
+            and not self._manifest_key_exists_locally(rel_path)
         ]
 
     def _record_pruned_file(self, relative_path: str, entry: ManifestEntry) -> None:

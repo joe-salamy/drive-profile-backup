@@ -7,8 +7,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import drive_backup.engine as engine_module
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, compute_md5
+from drive_backup.machine_state import CollectorOutcome, CollectorStatus
 from drive_backup.engine import (
     BackupEngine,
     ManifestProgressError,
@@ -44,7 +46,9 @@ class TestBackupEngineDryRun:
             manifest_path=str(manifest_path),
         )
 
-        report = BackupEngine(config, dry_run=True).run()
+        report = BackupEngine(
+            config, dry_run=True, collect_machine_state_snapshot=False
+        ).run()
 
         assert report["dry_run"] is True
         assert report["files_scanned"] >= 2
@@ -65,7 +69,9 @@ class TestBackupEngineDryRun:
         def callback(file: FileEntry, event: ProgressEvent) -> None:
             calls.append((file.relative_path, event))
 
-        BackupEngine(config, dry_run=True).run(progress_callback=callback)
+        BackupEngine(config, dry_run=True, collect_machine_state_snapshot=False).run(
+            progress_callback=callback
+        )
 
         assert len(calls) >= 1
         assert any(
@@ -89,7 +95,9 @@ class TestBackupEngineDryRun:
             manifest_path=str(tmp_path / "manifest.json"),
         )
 
-        report = BackupEngine(config, dry_run=True).run()
+        report = BackupEngine(
+            config, dry_run=True, collect_machine_state_snapshot=False
+        ).run()
 
         assert report["files_skipped_exclusion"] == 1
 
@@ -117,7 +125,9 @@ class TestBackupEngineDryRun:
         )
         manifest.save(str(manifest_path))
 
-        report = BackupEngine(config, dry_run=True).run()
+        report = BackupEngine(
+            config, dry_run=True, collect_machine_state_snapshot=False
+        ).run()
 
         assert report["files_skipped_dedup"] == 1
         assert report["files_uploaded"] == 0
@@ -146,7 +156,9 @@ class TestBackupEngineDryRun:
         )
         manifest.save(str(manifest_path))
 
-        report = BackupEngine(config, dry_run=True, full=True).run()
+        report = BackupEngine(
+            config, dry_run=True, full=True, collect_machine_state_snapshot=False
+        ).run()
 
         assert report["files_uploaded"] == 1
 
@@ -174,7 +186,9 @@ class TestBackupEngineDryRun:
             manifest_path=str(manifest_path),
         )
 
-        report = BackupEngine(config, dry_run=True, prune=False).run()
+        report = BackupEngine(
+            config, dry_run=True, prune=False, collect_machine_state_snapshot=False
+        ).run()
 
         assert report["files_pruned"] == 0
         assert report["pruned_files"] == []
@@ -212,11 +226,280 @@ class TestBackupEngineDryRun:
             manifest_path=str(manifest_path),
         )
 
-        report = BackupEngine(config, dry_run=True, prune=True).run()
+        report = BackupEngine(
+            config, dry_run=True, prune=True, collect_machine_state_snapshot=False
+        ).run()
 
         assert report["files_pruned"] == 1
         assert report["pruned_files"][0]["relative_path"] == "old/moved.txt"
         assert Manifest.load(str(manifest_path)).get("old/moved.txt") is not None
+
+
+class TestBackupEngineMachineState:
+    def test_collection_runs_after_manifest_load_before_drive_and_scan(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        events: list[str] = []
+        backup_root = tmp_path / "backup"
+        backup_root.mkdir()
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "state" / "manifest.json"),
+            machine_state_collectors=[],
+        )
+        real_load = Manifest.load
+
+        def load_manifest(path: str) -> Manifest:
+            events.append("manifest")
+            return real_load(path)
+
+        def collect(root: str, names: list[str]) -> list[CollectorOutcome]:
+            events.append("collect")
+            return []
+
+        def scan_files(config: Config) -> list[FileEntry]:
+            events.append("scan")
+            return []
+
+        class FakeDrive:
+            def authenticate(self) -> None:
+                events.append("authenticate")
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": "report_id", "md5Checksum": "report_md5"}
+
+        monkeypatch.setattr(Manifest, "load", load_manifest)
+        monkeypatch.setattr(engine_module, "collect_machine_state", collect)
+        monkeypatch.setattr(engine_module, "scan", scan_files)
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
+
+        BackupEngine(config).run()
+
+        assert events[:4] == ["manifest", "collect", "authenticate", "scan"]
+
+    def test_dry_run_refreshes_and_scans_generated_json(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        backup_root.mkdir()
+        manifest_path = tmp_path / "state" / "manifest.json"
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+            machine_state_collectors=["system"],
+        )
+
+        def collect(root: str, names: list[str]) -> list[CollectorOutcome]:
+            output = Path(root) / "_machine_state" / "system.json"
+            output.parent.mkdir()
+            output.write_text("{}", encoding="utf-8")
+            return [
+                CollectorOutcome(
+                    name="system",
+                    status=CollectorStatus.SUCCEEDED,
+                    output_file="_machine_state/system.json",
+                    warnings=(),
+                    previous_output_retained=False,
+                )
+            ]
+
+        monkeypatch.setattr(engine_module, "collect_machine_state", collect)
+
+        report = BackupEngine(config, dry_run=True).run()
+
+        assert report["machine_state_refreshed"] is True
+        assert report["files_scanned"] == 1
+        assert report["uploaded_files"][0]["relative_path"] == (
+            "_machine_state/system.json"
+        )
+        assert not manifest_path.exists()
+
+    def test_skip_refresh_still_scans_existing_snapshot(self, tmp_path: Path) -> None:
+        backup_root = tmp_path / "backup"
+        output = backup_root / "_machine_state" / "system.json"
+        output.parent.mkdir(parents=True)
+        output.write_text("{}", encoding="utf-8")
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "state" / "manifest.json"),
+        )
+
+        report = BackupEngine(
+            config, dry_run=True, collect_machine_state_snapshot=False
+        ).run()
+
+        assert report["machine_state_refreshed"] is False
+        assert report["machine_state_collectors"] == []
+        assert report["uploaded_files"][0]["relative_path"] == (
+            "_machine_state/system.json"
+        )
+
+    def test_failed_collector_is_reported_without_file_error(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        backup_root.mkdir()
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "state" / "manifest.json"),
+            machine_state_collectors=["system"],
+        )
+        monkeypatch.setattr(
+            engine_module,
+            "collect_machine_state",
+            lambda root, names: [
+                CollectorOutcome(
+                    name="system",
+                    status=CollectorStatus.FAILED,
+                    output_file=None,
+                    warnings=("powershell unavailable",),
+                    previous_output_retained=False,
+                )
+            ],
+        )
+
+        report = BackupEngine(config, dry_run=True).run()
+
+        assert report["files_skipped_error"] == 0
+        assert report["error_files"] == []
+        assert report["machine_state_collectors"][0]["status"] == "failed"
+
+    def test_unexpected_refresh_failure_continues_and_protects_prune(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        backup_root.mkdir()
+        ordinary_file = backup_root / "ordinary.txt"
+        ordinary_file.write_text("backup me", encoding="utf-8")
+        manifest_path = tmp_path / "state" / "manifest.json"
+        manifest = Manifest()
+        manifest.set(
+            relative_path="_machine_state/system.json",
+            md5="abc",
+            size=10,
+            mtime=1.0,
+            drive_file_id="system_drive",
+            drive_parent_id="parent",
+        )
+        manifest.save(str(manifest_path))
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+            machine_state_collectors=["system"],
+        )
+
+        def fail_refresh(root: str, names: list[str]) -> list[CollectorOutcome]:
+            raise OSError("collector subsystem failure")
+
+        monkeypatch.setattr(engine_module, "collect_machine_state", fail_refresh)
+
+        report = BackupEngine(config, dry_run=True, prune=True).run()
+
+        assert report["machine_state_refreshed"] is True
+        assert [row["name"] for row in report["machine_state_collectors"]] == [
+            "system",
+            "snapshot",
+        ]
+        assert all(
+            row["status"] == "failed" for row in report["machine_state_collectors"]
+        )
+        assert report["files_scanned"] == 1
+        assert report["files_pruned"] == 0
+
+    def test_enabled_failed_collector_is_prune_protected_but_disabled_is_pruned(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        class FakeDrive:
+            def __init__(self) -> None:
+                self.trash_calls: list[str] = []
+
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": "report_id", "md5Checksum": "report_md5"}
+
+            def trash_file(self, file_id: str) -> dict[str, str]:
+                self.trash_calls.append(file_id)
+                return {"id": file_id}
+
+        backup_root = tmp_path / "backup"
+        backup_root.mkdir()
+        manifest_path = tmp_path / "state" / "manifest.json"
+        manifest = Manifest()
+        for relative_path, drive_id in (
+            ("_machine_state/system.json", "system_drive"),
+            ("_machine_state/services.json", "services_drive"),
+        ):
+            manifest.set(
+                relative_path=relative_path,
+                md5="abc",
+                size=10,
+                mtime=1.0,
+                drive_file_id=drive_id,
+                drive_parent_id="parent",
+            )
+        manifest.save(str(manifest_path))
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+            machine_state_collectors=["system"],
+        )
+        monkeypatch.setattr(
+            engine_module,
+            "collect_machine_state",
+            lambda root, names: [
+                CollectorOutcome(
+                    name="system",
+                    status=CollectorStatus.FAILED,
+                    output_file=None,
+                    warnings=("failed",),
+                    previous_output_retained=False,
+                )
+            ],
+        )
+        drive = FakeDrive()
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: drive)
+
+        report = BackupEngine(config, prune=True).run()
+
+        assert drive.trash_calls == ["services_drive"]
+        assert report["files_pruned"] == 1
+        loaded = Manifest.load(str(manifest_path))
+        assert loaded.get("_machine_state/system.json") is not None
+        assert loaded.get("_machine_state/services.json") is None
 
 
 class TestBackupEngineUploadErrors:
@@ -230,7 +513,9 @@ class TestBackupEngineUploadErrors:
             exclude_files=[],
             manifest_path=str(tmp_path / "manifest.json"),
         )
-        engine = BackupEngine(config, dry_run=False)
+        engine = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        )
         mock_drive = MagicMock()
         mock_drive.get_or_create_folder.return_value = "root_id"
         mock_drive.upload_file.side_effect = RuntimeError("Upload failed")
@@ -264,7 +549,9 @@ class TestBackupEngineUploadErrors:
             exclude_files=[],
             manifest_path=str(manifest_path),
         )
-        engine = BackupEngine(config, dry_run=False)
+        engine = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        )
         mock_drive = MagicMock()
         mock_drive.find_file_by_name_and_parent.return_value = None
         mock_drive.upload_file.return_value = {
@@ -301,7 +588,9 @@ class TestBackupEngineUploadErrors:
             exclude_files=[],
             manifest_path=str(tmp_path / "manifest.json"),
         )
-        engine = BackupEngine(config, dry_run=False)
+        engine = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        )
         mock_drive = MagicMock()
         mock_drive.find_file_by_name_and_parent.return_value = {
             "id": "orphan_id",
@@ -345,7 +634,9 @@ class TestBackupEngineUploadErrors:
             exclude_files=[],
             manifest_path=str(tmp_path / "manifest.json"),
         )
-        engine = BackupEngine(config, dry_run=False)
+        engine = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        )
         mock_drive = MagicMock()
         mock_drive.find_file_by_name_and_parent.return_value = None
         mock_drive.upload_file.return_value = {
@@ -383,7 +674,9 @@ class TestBackupEngineUploadErrors:
             exclude_files=[],
             manifest_path=str(tmp_path / "manifest.json"),
         )
-        engine = BackupEngine(config, dry_run=False)
+        engine = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        )
         mock_drive = MagicMock()
         mock_drive.find_file_by_name_and_parent.side_effect = RuntimeError(
             "lookup failed"
@@ -431,7 +724,9 @@ class TestBackupEngineUploadErrors:
             exclude_files=[],
             manifest_path=str(manifest_path),
         )
-        engine = BackupEngine(config, dry_run=False, prune=True)
+        engine = BackupEngine(
+            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+        )
         engine.manifest = Manifest.load(str(manifest_path))
         mock_drive = MagicMock()
         mock_drive.trash_file.return_value = {"id": "drive_old"}
@@ -499,7 +794,9 @@ class TestBackupEngineUploadErrors:
         )
 
         with pytest.raises(ManifestProgressError):
-            BackupEngine(config, dry_run=False).run()
+            BackupEngine(
+                config, dry_run=False, collect_machine_state_snapshot=False
+            ).run()
 
         assert len(upload_calls) == 1
 
@@ -529,7 +826,9 @@ class TestBackupEngineUploadErrors:
             manifest_path=str(tmp_path / "manifest.json"),
         )
 
-        report = BackupEngine(config, dry_run=False).run()
+        report = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        ).run()
 
         assert report["files_scanned"] == 0
 
@@ -586,7 +885,9 @@ class TestBackupEngineUploadErrors:
             manifest_path=str(manifest_path),
         )
 
-        report = BackupEngine(config, dry_run=False, prune=True).run()
+        report = BackupEngine(
+            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+        ).run()
 
         assert (
             report["prune_skipped_reason"]
@@ -601,7 +902,7 @@ class TestBackupEngineProfileFolders:
             profile_name="laptop-a",
             drive_parent_folder_name="Profile Backups",
         )
-        engine = BackupEngine(config)
+        engine = BackupEngine(config, collect_machine_state_snapshot=False)
         mock_drive = MagicMock()
         mock_drive.get_or_create_folder.side_effect = ["parent_id", "profile_id"]
         engine.drive = mock_drive
@@ -667,7 +968,9 @@ class TestBackupEnginePrune:
             manifest_path=str(manifest_path),
         )
 
-        report = BackupEngine(config, dry_run=False, prune=True).run()
+        report = BackupEngine(
+            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+        ).run()
 
         assert fake_drive.trash_calls == ["drive_old"]
         assert report["files_pruned"] == 1
@@ -729,6 +1032,19 @@ class TestBackupEnginePrune:
         )
         assert fake_drive.trash_calls == []
         assert Manifest.load(str(manifest_path)).get("old/file.txt") is not None
+        assert not missing_root.exists()
+        assert report["machine_state_refreshed"] is False
+        assert report["machine_state_collectors"] == [
+            {
+                "name": "snapshot",
+                "status": "failed",
+                "output_file": None,
+                "warnings": [
+                    "Backup root is unavailable; machine-state refresh skipped"
+                ],
+                "previous_output_retained": False,
+            }
+        ]
 
     def test_prune_failure_keeps_manifest_entry(
         self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
@@ -774,7 +1090,9 @@ class TestBackupEnginePrune:
             manifest_path=str(manifest_path),
         )
 
-        report = BackupEngine(config, dry_run=False, prune=True).run()
+        report = BackupEngine(
+            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+        ).run()
 
         assert report["files_pruned"] == 0
         assert report["files_prune_failed"] == 1

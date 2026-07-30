@@ -40,6 +40,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Move Drive files missing locally to trash and remove them from the manifest",
     )
+    parser.add_argument(
+        "--skip-machine-state",
+        action="store_true",
+        help="Do not refresh generated machine-state inventories before this backup",
+    )
     args = parser.parse_args(argv)
     if args.full and args.prune:
         parser.error(
@@ -96,7 +101,11 @@ def main(argv: list[str] | None = None) -> None:
 
     # Create engine
     engine = BackupEngine(
-        config, dry_run=args.dry_run, full=args.full, prune=args.prune
+        config,
+        dry_run=args.dry_run,
+        full=args.full,
+        prune=args.prune,
+        collect_machine_state_snapshot=not args.skip_machine_state,
     )
 
     # Progress tracking
@@ -166,6 +175,19 @@ def _print_summary(
         report["total_size_uploaded_human"],
     )
     table.add_row("Total eligible size", report["total_size_eligible_human"])
+    collector_rows = report["machine_state_collectors"]
+    if report["machine_state_refreshed"]:
+        counts = {
+            status: sum(row["status"] == status for row in collector_rows)
+            for status in ("succeeded", "partial", "failed")
+        }
+        machine_state_summary = (
+            f"{counts['succeeded']} succeeded, {counts['partial']} partial, "
+            f"{counts['failed']} failed"
+        )
+    else:
+        machine_state_summary = "Not refreshed"
+    table.add_row("Machine state", machine_state_summary)
 
     if report.get("drive_folder_url"):
         table.add_row("Drive folder", report["drive_folder_url"])
@@ -181,6 +203,11 @@ def _print_summary(
         )
         table.add_row("Prune failures", str(report.get("files_prune_failed", 0)))
     console.print(table)
+    for collector in collector_rows:
+        if collector["status"] not in ("partial", "failed"):
+            continue
+        for warning in collector["warnings"]:
+            console.print(f"[yellow]{collector['name']}: {warning}[/]")
 
     # Show top uploaded (or to-be-uploaded) files by size
     uploaded = report.get("uploaded_files", [])

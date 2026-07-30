@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from drive_backup.config import Config, load_config
+from drive_backup.config import MACHINE_STATE_COLLECTORS, Config, load_config
 
 
 class TestConfigDefaults:
@@ -26,6 +26,13 @@ class TestConfigDefaults:
         config = Config(profile_name="laptop-a")
         assert config.max_file_size_mb == 500
         assert config.max_file_size_bytes == 500 * 1024 * 1024
+
+    def test_default_machine_state_collectors_are_ordered_and_fresh(self) -> None:
+        first = Config(profile_name="laptop-a")
+        second = Config(profile_name="laptop-b")
+
+        assert first.machine_state_collectors == list(MACHINE_STATE_COLLECTORS)
+        assert first.machine_state_collectors is not second.machine_state_collectors
 
     def test_media_has_no_size_limit(self) -> None:
         config = Config(profile_name="laptop-a")
@@ -119,6 +126,47 @@ class TestLoadConfig:
 
         assert config.max_file_size_mb == 200.0
         assert "AppData" in config.exclude_dirs  # Default preserved
+
+    @pytest.mark.parametrize("collectors", [["wsl", "system"], []])
+    def test_machine_state_collector_subset_preserves_order(
+        self, tmp_path: Path, collectors: list[str]
+    ) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "profile_name": "laptop-a",
+                    "machine_state_collectors": collectors,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert load_config(path).machine_state_collectors == collectors
+
+    @pytest.mark.parametrize(
+        "collectors, expected",
+        [
+            (["system", "unknown"], "unknown names: unknown"),
+            (["wsl", "wsl"], "duplicate names: wsl"),
+        ],
+    )
+    def test_rejects_invalid_machine_state_collector_names(
+        self, tmp_path: Path, collectors: list[str], expected: str
+    ) -> None:
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "profile_name": "laptop-a",
+                    "machine_state_collectors": collectors,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match=expected):
+            load_config(path)
 
     def test_rejects_unknown_keys_in_sorted_order(self, tmp_path: Path) -> None:
         path = tmp_path / "config.yaml"

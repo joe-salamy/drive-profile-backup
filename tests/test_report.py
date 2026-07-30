@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 
+from drive_backup.machine_state import CollectorOutcome, CollectorStatus
 from drive_backup.report import (
     BackupStats,
     ErrorFile,
@@ -127,6 +128,8 @@ class TestGenerateReport:
             "extension_breakdown",
             "error_files",
             "excluded_directories_count",
+            "machine_state_refreshed",
+            "machine_state_collectors",
         )
 
     def test_report_includes_skipped_files(self) -> None:
@@ -189,6 +192,34 @@ class TestGenerateReport:
         report = generate_report(stats)
         assert len(report["prune_error_files"]) == 1
         assert report["prune_error_files"][0]["error"] == "not found"
+
+    def test_report_serializes_machine_state_outcomes_to_plain_json(self) -> None:
+        stats = BackupStats(
+            machine_state_refreshed=True,
+            machine_state_collectors=[
+                CollectorOutcome(
+                    name="wsl",
+                    status=CollectorStatus.PARTIAL,
+                    output_file="_machine_state/wsl.json",
+                    warnings=("distro failed",),
+                    previous_output_retained=False,
+                )
+            ],
+        )
+
+        report = generate_report(stats)
+
+        assert report["machine_state_refreshed"] is True
+        assert report["machine_state_collectors"] == [
+            {
+                "name": "wsl",
+                "status": "partial",
+                "output_file": "_machine_state/wsl.json",
+                "warnings": ["distro failed"],
+                "previous_output_retained": False,
+            }
+        ]
+        json.dumps(report)
 
 
 class TestSaveReport:

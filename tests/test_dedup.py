@@ -1,6 +1,7 @@
 """Tests for deduplication and manifest management."""
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -285,7 +286,7 @@ class TestManifestCorrupted:
         path = tmp_path / "manifest.json"
         path.write_text("not valid json{{{", encoding="utf-8")
 
-        with pytest.raises(ManifestLoadError, match=str(path)):
+        with pytest.raises(ManifestLoadError, match=re.escape(str(path))):
             Manifest.load(str(path))
 
     def test_load_malformed_entry(self, tmp_path: Path) -> None:
@@ -300,7 +301,7 @@ class TestManifestCorrupted:
             encoding="utf-8",
         )
 
-        with pytest.raises(ManifestLoadError, match=str(path)):
+        with pytest.raises(ManifestLoadError, match=re.escape(str(path))):
             Manifest.load(str(path))
 
     def test_load_rejects_unsupported_version(self, tmp_path: Path) -> None:
