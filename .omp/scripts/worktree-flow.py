@@ -537,7 +537,7 @@ class HarnessWorktreeFlow:
             str(Path(__file__).resolve()),
             "--resume",
             "--plan",
-            str(self.config.plan),
+            str(self.resume_plan_path(state)),
             "--worktree",
             state.feature_worktree,
             "--repo",
@@ -574,6 +574,33 @@ class HarnessWorktreeFlow:
         if args is None:
             return None
         return shell_command(args)
+
+    def resume_plan_path(self, state: WorkflowState) -> Path:
+        if state.plan_path is not None:
+            saved_plan = Path(state.plan_path)
+            if saved_plan.exists():
+                return saved_plan
+        return self.config.plan
+
+    def recover_resume_plan(self, requested_plan: Path, worktree: Path) -> Path:
+        if requested_plan.exists():
+            return requested_plan
+        state = self.read_workflow_state_file(self.workflow_state_file(worktree))
+        if state is not None:
+            candidates = [
+                Path(state.plan_path) if state.plan_path is not None else None,
+                worktree / self.worktree_flow_dir / state.run_id / "plan.md",
+                worktree / self.handoff_dir / "resume-plan.md",
+            ]
+            for candidate in candidates:
+                if candidate is not None and candidate.exists():
+                    self.print_checkpoint(
+                        "recover",
+                        "Resume plan",
+                        (("missing plan", requested_plan), ("saved plan", candidate)),
+                    )
+                    return candidate.resolve()
+        raise FlowError(f"Plan file does not exist: {requested_plan}")
 
     def update_workflow_state(
         self, state: WorkflowState, **changes: object
@@ -2108,6 +2135,53 @@ Write `{summary.as_posix()}` before finishing.
         )
         return state, integration_worktree
 
+    def refresh_committed_integration_for_advanced_base(
+        self,
+        state: WorkflowState,
+        integration_worktree: Path,
+        integration_branch: str,
+    ) -> WorkflowState:
+        if state.completed_stage != "integration_committed":
+            return state
+        base_is_ancestor = self.runner.run(
+            ["git", "merge-base", "--is-ancestor", self.base, integration_branch],
+            integration_worktree,
+            check=False,
+        )
+        if base_is_ancestor.returncode == 0:
+            return state
+        if self.current_branch(integration_worktree) != integration_branch:
+            raise FlowError(
+                "Cannot refresh the recorded integration branch because its "
+                "worktree is on a different branch."
+            )
+        self.require_clean_except_handoff(
+            integration_worktree, "Recorded integration"
+        )
+        subject = self.runner.run(
+            ["git", "log", "-1", "--format=%s", integration_branch],
+            integration_worktree,
+        ).stdout.strip()
+        expected_subject = f"Harness: {state.plan_title}"
+        if subject != expected_subject:
+            raise FlowError(
+                "Cannot refresh the recorded integration branch because its tip "
+                f"is not the generated integration commit {expected_subject!r}."
+            )
+        self.runner.run(["git", "reset", "--hard", self.base], integration_worktree)
+        state = self.update_workflow_state(
+            state, completed_stage="integration_worktree_created"
+        )
+        self.print_checkpoint(
+            "recover",
+            "Integration base",
+            (
+                ("base", self.base),
+                ("integration branch", integration_branch),
+            ),
+        )
+        return state
+
     def finish(
         self, repo: Path, state: WorkflowState, names: Names, plan_path: Path
     ) -> WorkflowState:
@@ -2135,6 +2209,9 @@ Write `{summary.as_posix()}` before finishing.
         )
         if state.integration_branch is None:
             raise FlowError("Integration branch is missing from workflow state.")
+        state = self.refresh_committed_integration_for_advanced_base(
+            state, integration_worktree, state.integration_branch
+        )
         integration_branch = state.integration_branch
         integration_plan = self.integration_plan_path(
             names.worktree, integration_worktree, plan_path
@@ -3174,9 +3251,13 @@ def main(
         )
         if args.resume:
             repo = flow.git_root(config.repo.resolve())
-            plan = config.plan.resolve()
+            requested_plan = config.plan.resolve()
+            worktree = (
+                resume_worktree_arg
+                or flow.infer_resume_worktree(repo, requested_plan)
+            )
+            plan = flow.recover_resume_plan(requested_plan, worktree)
             flow.validate(repo, plan)
-            worktree = resume_worktree_arg or flow.infer_resume_worktree(repo, plan)
             flow.resume(
                 repo=repo,
                 plan=plan,
