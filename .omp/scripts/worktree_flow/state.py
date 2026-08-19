@@ -6,17 +6,16 @@ import json
 import math
 import os
 import re
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
-from .models import FlowError, WorkflowStage, WorkflowState, STATE_FIELDS
+from .models import STATE_FIELDS, FlowError, WorkflowStage, WorkflowState
 from .paths import (
     MAX_STATE_BYTES,
     atomic_write_json,
     canonical_path,
     ensure_directory,
-    lstat_regular,
     read_bytes_bounded,
     reject_symlink_components,
     require_confined,
@@ -62,9 +61,10 @@ def _require_hex64(value: object, *, label: str) -> str:
     return value
 
 
-
 _ALLOWED_TRANSITIONS: dict[WorkflowStage, frozenset[WorkflowStage]] = {
-    WorkflowStage.FEATURE_ALLOCATED: frozenset({WorkflowStage.FEATURE_WORKTREE_CREATED}),
+    WorkflowStage.FEATURE_ALLOCATED: frozenset(
+        {WorkflowStage.FEATURE_WORKTREE_CREATED}
+    ),
     WorkflowStage.FEATURE_WORKTREE_CREATED: frozenset({WorkflowStage.PLAN_COPIED}),
     WorkflowStage.PLAN_COPIED: frozenset({WorkflowStage.IMPLEMENTATION_STARTED}),
     WorkflowStage.IMPLEMENTATION_STARTED: frozenset(
@@ -120,7 +120,9 @@ _ALLOWED_TRANSITIONS: dict[WorkflowStage, frozenset[WorkflowStage]] = {
     WorkflowStage.INTEGRATION_COMMITTED: frozenset(
         {WorkflowStage.BASE_FAST_FORWARDED, WorkflowStage.INTEGRATION_REBUILD_CLEANUP}
     ),
-    WorkflowStage.INTEGRATION_REBUILD_CLEANUP: frozenset({WorkflowStage.AUDIT_COMPLETE}),
+    WorkflowStage.INTEGRATION_REBUILD_CLEANUP: frozenset(
+        {WorkflowStage.AUDIT_COMPLETE}
+    ),
     WorkflowStage.BASE_FAST_FORWARDED: frozenset({WorkflowStage.HANDOFF_ARCHIVED}),
     WorkflowStage.HANDOFF_ARCHIVED: frozenset({WorkflowStage.ARTIFACTS_COMMITTED}),
     WorkflowStage.ARTIFACTS_COMMITTED: frozenset(
@@ -130,7 +132,9 @@ _ALLOWED_TRANSITIONS: dict[WorkflowStage, frozenset[WorkflowStage]] = {
         {WorkflowStage.FEATURE_WORKTREE_REMOVED}
     ),
     WorkflowStage.FEATURE_WORKTREE_REMOVED: frozenset({WorkflowStage.WORKTREES_PRUNED}),
-    WorkflowStage.WORKTREES_PRUNED: frozenset({WorkflowStage.INTEGRATION_BRANCH_REMOVED}),
+    WorkflowStage.WORKTREES_PRUNED: frozenset(
+        {WorkflowStage.INTEGRATION_BRANCH_REMOVED}
+    ),
     WorkflowStage.INTEGRATION_BRANCH_REMOVED: frozenset(
         {WorkflowStage.FEATURE_BRANCH_REMOVED}
     ),
@@ -147,7 +151,9 @@ def allowed_transition(current: WorkflowStage, target: WorkflowStage) -> bool:
 
 def require_transition(current: WorkflowStage, target: WorkflowStage) -> None:
     if not allowed_transition(current, target):
-        raise FlowError(f"Invalid workflow transition: {current.value} -> {target.value}")
+        raise FlowError(
+            f"Invalid workflow transition: {current.value} -> {target.value}"
+        )
 
 
 class RunLock:
@@ -205,7 +211,7 @@ class RunLock:
         finally:
             handle.close()  # type: ignore[union-attr]
 
-    def __enter__(self) -> "RunLock":
+    def __enter__(self) -> RunLock:
         self.acquire()
         return self
 
@@ -223,9 +229,15 @@ class WorkflowStateStore:
         self.repo_root = canonical_path(repo_root, must_exist=True)
         self.git_common_dir = canonical_path(git_common_dir, must_exist=True)
         if self.root == self.repo_root or self.root == self.git_common_dir:
-            raise FlowError("Workflow state root must be outside the selected repository and Git directory.")
-        if self.root.is_relative_to(self.repo_root) or self.root.is_relative_to(self.git_common_dir):
-            raise FlowError("Workflow state root must be outside the selected repository and Git directory.")
+            raise FlowError(
+                "Workflow state root must be outside the selected repository and Git directory."
+            )
+        if self.root.is_relative_to(self.repo_root) or self.root.is_relative_to(
+            self.git_common_dir
+        ):
+            raise FlowError(
+                "Workflow state root must be outside the selected repository and Git directory."
+            )
 
     def run_dir(self, run_id: str) -> Path:
         validate_identifier(run_id, label="run id")
@@ -242,13 +254,19 @@ class WorkflowStateStore:
         ensure_directory(self.root, mode=0o700)
         destination = self.root / run_id
         if destination.exists() or destination.is_symlink():
-            raise FlowError(f"Workflow run directory already exists; use --resume: {destination}")
+            raise FlowError(
+                f"Workflow run directory already exists; use --resume: {destination}"
+            )
         try:
             destination.mkdir(mode=0o700)
         except FileExistsError as exc:
-            raise FlowError(f"Workflow run directory already exists; use --resume: {destination}") from exc
+            raise FlowError(
+                f"Workflow run directory already exists; use --resume: {destination}"
+            ) from exc
         except OSError as exc:
-            raise FlowError(f"Cannot reserve workflow run directory: {destination}") from exc
+            raise FlowError(
+                f"Cannot reserve workflow run directory: {destination}"
+            ) from exc
         return canonical_path(destination, must_exist=True)
 
     @contextmanager
@@ -296,16 +314,26 @@ class WorkflowStateStore:
         if set(data) != set(STATE_FIELDS):
             missing = sorted(set(STATE_FIELDS) - set(data))
             unknown = sorted(set(data) - set(STATE_FIELDS))
-            raise FlowError(f"Workflow state fields mismatch; missing={missing}, unknown={unknown}")
+            raise FlowError(
+                f"Workflow state fields mismatch; missing={missing}, unknown={unknown}"
+            )
         schema_version = data["schema_version"]
-        if isinstance(schema_version, bool) or not isinstance(schema_version, int) or schema_version != self.schema_version:
-            raise FlowError("Unsupported workflow state schema version; restart with schema-v2 state.")
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version != self.schema_version
+        ):
+            raise FlowError(
+                "Unsupported workflow state schema version; restart with schema-v2 state."
+            )
         run_id_value = data["run_id"]
         if not isinstance(run_id_value, str):
             raise FlowError("Workflow state field run_id has the wrong type.")
         validate_identifier(run_id_value, label="run id")
         if expected_run_id is not None and run_id_value != expected_run_id:
-            raise FlowError("Workflow state run_id does not match its selected run directory.")
+            raise FlowError(
+                "Workflow state run_id does not match its selected run directory."
+            )
         identifiers = ("run_id", "slug")
         for field in identifiers:
             value = data[field]
@@ -320,11 +348,23 @@ class WorkflowStateStore:
             canonical = canonical_path(Path(value), must_exist=False)
             if str(canonical) != value:
                 raise FlowError(f"Workflow state path field {field} is not canonical.")
-        if data["repo_root"] != str(self.repo_root) or data["git_common_dir"] != str(self.git_common_dir):
-            raise FlowError("Workflow state repository identity does not match the selected repository.")
+        if data["repo_root"] != str(self.repo_root) or data["git_common_dir"] != str(
+            self.git_common_dir
+        ):
+            raise FlowError(
+                "Workflow state repository identity does not match the selected repository."
+            )
         base_branch = _require_branch_text(data["base_branch"], label="base_branch")
-        feature_branch = _require_branch_text(data["feature_branch"], label="feature_branch")
-        for field in ("harness", "harness_kind", "harness_dir", "plan_title", "merge_mode"):
+        feature_branch = _require_branch_text(
+            data["feature_branch"], label="feature_branch"
+        )
+        for field in (
+            "harness",
+            "harness_kind",
+            "harness_dir",
+            "plan_title",
+            "merge_mode",
+        ):
             if not isinstance(data[field], str) or not data[field]:
                 raise FlowError(f"Workflow state field {field} has the wrong type.")
         harness_dir = validate_harness_dir(data["harness_dir"])
@@ -373,13 +413,25 @@ class WorkflowStateStore:
             _require_hex64(fingerprint, label="integration_worktree_fingerprint")
         timeout = data["command_timeout_seconds"]
         if timeout is not None:
-            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(float(timeout)) or timeout <= 0:
-                raise FlowError("Workflow state command_timeout_seconds has the wrong type.")
+            if (
+                isinstance(timeout, bool)
+                or not isinstance(timeout, (int, float))
+                or not math.isfinite(float(timeout))
+                or timeout <= 0
+            ):
+                raise FlowError(
+                    "Workflow state command_timeout_seconds has the wrong type."
+                )
         for field in ("integration_worktree", "archive_dir"):
             value = data[field]
             if value is not None:
-                if not Path(value).is_absolute() or str(canonical_path(Path(value), must_exist=False)) != value:
-                    raise FlowError(f"Workflow state path field {field} is not canonical.")
+                if (
+                    not Path(value).is_absolute()
+                    or str(canonical_path(Path(value), must_exist=False)) != value
+                ):
+                    raise FlowError(
+                        f"Workflow state path field {field} is not canonical."
+                    )
         if not isinstance(data["keep_worktrees"], bool):
             raise FlowError("Workflow state keep_worktrees must be boolean.")
         stage_value = data["stage"]
@@ -427,7 +479,9 @@ class WorkflowStateStore:
 
     def load(self, run_id: str) -> WorkflowState:
         validate_identifier(run_id, label="run id")
-        return self._state_from_data(self._decode(self.state_path(run_id)), expected_run_id=run_id)
+        return self._state_from_data(
+            self._decode(self.state_path(run_id)), expected_run_id=run_id
+        )
 
     @staticmethod
     def _payload(state: WorkflowState) -> dict[str, object]:
@@ -440,7 +494,9 @@ class WorkflowStateStore:
             raise FlowError("Cannot write a non-schema-v2 workflow state.")
         if state.run_id != self.run_dir(state.run_id).name:
             raise FlowError("Workflow state run_id does not match its state directory.")
-        if state.repo_root != str(self.repo_root) or state.git_common_dir != str(self.git_common_dir):
+        if state.repo_root != str(self.repo_root) or state.git_common_dir != str(
+            self.git_common_dir
+        ):
             raise FlowError("Cannot write workflow state for a different repository.")
         payload = self._payload(state)
         self._state_from_data(payload, expected_run_id=state.run_id)
@@ -449,7 +505,9 @@ class WorkflowStateStore:
         atomic_write_json(path, payload, max_bytes=MAX_STATE_BYTES)
         return path
 
-    def transition(self, state: WorkflowState, target: WorkflowStage, **changes: object) -> WorkflowState:
+    def transition(
+        self, state: WorkflowState, target: WorkflowStage, **changes: object
+    ) -> WorkflowState:
         require_transition(state.stage, target)
         values = {field: getattr(state, field) for field in STATE_FIELDS}
         values.update(changes)
@@ -468,4 +526,3 @@ class WorkflowStateStore:
         if not isinstance(run_id, str):
             raise FlowError("Candidate workflow state run_id has the wrong type.")
         return self._state_from_data(data, expected_run_id=None)
-

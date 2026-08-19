@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
 
-from .command_runner import CommandResult, CommandRunner, format_command_failure, logged_command
-from .models import FlowError, FlowConfig, HarnessKind
-from .paths import MAX_DIAGNOSTIC_CHARS, atomic_write_text, ensure_directory, safe_unlink
+from .command_runner import (
+    CommandResult,
+    CommandRunner,
+    logged_command,
+)
+from .models import FlowConfig, FlowError, HarnessKind
+from .paths import (
+    MAX_DIAGNOSTIC_CHARS,
+    atomic_write_text,
+    ensure_directory,
+    safe_unlink,
+)
 from .usage import UsageCollector
 
 Logger = Callable[[str, Mapping[str, object]], None]
@@ -22,8 +31,12 @@ class HarnessFailure:
     result: CommandResult
 
     def message(self) -> str:
-        status = "timed out" if self.result.timed_out else f"exited {self.result.returncode}"
-        return f"Harness phase {self.phase} {status}; diagnostics: {self.diagnostic_path}"
+        status = (
+            "timed out" if self.result.timed_out else f"exited {self.result.returncode}"
+        )
+        return (
+            f"Harness phase {self.phase} {status}; diagnostics: {self.diagnostic_path}"
+        )
 
 
 def phase_model(
@@ -36,7 +49,11 @@ def phase_model(
 ) -> str | None:
     if phase in {"audit", "post_conflict_audit"}:
         return review_model or model or ("@slow" if kind is HarnessKind.OMP else None)
-    return implementation_model or model or ("@default" if kind is HarnessKind.OMP else None)
+    return (
+        implementation_model
+        or model
+        or ("@default" if kind is HarnessKind.OMP else None)
+    )
 
 
 class HarnessAdapter:
@@ -53,7 +70,11 @@ class HarnessAdapter:
         self.runner = runner
         self.kind = HarnessKind.from_executable(config.harness)
         self.logger = logger
-        self.usage = usage or UsageCollector(harness=config.harness, harness_dir=config.harness_dir, dry_run=runner.dry_run)
+        self.usage = usage or UsageCollector(
+            harness=config.harness,
+            harness_dir=config.harness_dir,
+            dry_run=runner.dry_run,
+        )
         self.writable_roots = writable_roots or (lambda _cwd: ())
 
     @property
@@ -99,7 +120,14 @@ class HarnessAdapter:
         return "@" + str(path)
 
     def omp_args(self, prompt: Path, phase: str) -> list[str]:
-        args = [self.config.harness, "-p", "--no-session", "--auto-approve", "--approval-mode", "yolo"]
+        args = [
+            self.config.harness,
+            "-p",
+            "--no-session",
+            "--auto-approve",
+            "--approval-mode",
+            "yolo",
+        ]
         model = self.model_for(phase)
         if model:
             args.extend(["--model", model])
@@ -107,7 +135,14 @@ class HarnessAdapter:
         return args
 
     def codex_args(self, cwd: Path, phase: str) -> list[str]:
-        args = [self.config.harness, "exec", "--cd", str(cwd), "--sandbox", "danger-full-access" if os.name == "nt" else "workspace-write"]
+        args = [
+            self.config.harness,
+            "exec",
+            "--cd",
+            str(cwd),
+            "--sandbox",
+            "danger-full-access" if os.name == "nt" else "workspace-write",
+        ]
         for root in self.writable_roots(cwd):
             args.extend(["--add-dir", str(root)])
         model = self.model_for(phase)
@@ -117,14 +152,24 @@ class HarnessAdapter:
         return args
 
     def opencode_args(self, cwd: Path, prompt: Path, phase: str) -> list[str]:
-        args = [self.config.harness, "run", "--dir", str(cwd), "--dangerously-skip-permissions"]
+        args = [
+            self.config.harness,
+            "run",
+            "--dir",
+            str(cwd),
+            "--dangerously-skip-permissions",
+        ]
         model = self.model_for(phase)
         if model:
             args.extend(["--model", model])
-        args.extend(["--file", str(prompt), "Execute the attached worktree-flow phase prompt."])
+        args.extend(
+            ["--file", str(prompt), "Execute the attached worktree-flow phase prompt."]
+        )
         return args
 
-    def command(self, cwd: Path, prompt: Path, phase: str) -> tuple[list[str], str | None]:
+    def command(
+        self, cwd: Path, prompt: Path, phase: str
+    ) -> tuple[list[str], str | None]:
         if self.kind is HarnessKind.OMP:
             return self.omp_args(prompt, phase), None
         if self.kind is HarnessKind.CODEX:
@@ -151,7 +196,12 @@ class HarnessAdapter:
             atomic_write_text(prompt, prompt_text)
         snapshot = self.usage.snapshot_sessions(cwd)
         args, _unused_input = self.command(cwd, prompt, phase)
-        self._log("harness_exec_start", cwd=str(cwd), command=logged_command(args), phase=phase)
+        self._log(
+            "harness_exec_start",
+            cwd=str(cwd),
+            command=logged_command(args),
+            phase=phase,
+        )
         input_text = prompt_text if self.kind is HarnessKind.CODEX else None
         result = self.runner.run(args, cwd, check=False, input_text=input_text)
         self._log(
@@ -191,7 +241,9 @@ class HarnessAdapter:
         """Grant one inheritable Modify rule only for Codex on Windows."""
         if self.kind is not HarnessKind.CODEX or os.name != "nt":
             return
-        shell = CommandRunner.resolve_executable("pwsh") or CommandRunner.resolve_executable("powershell")
+        shell = CommandRunner.resolve_executable(
+            "pwsh"
+        ) or CommandRunner.resolve_executable("powershell")
         if shell is None:
             raise FlowError("Codex ACL setup requires PowerShell (pwsh or powershell).")
         group = os.environ.get("CODEX_SANDBOX_GROUP", "CodexSandboxUsers")
@@ -204,23 +256,57 @@ class HarnessAdapter:
             "$acl.AddAccessRule($rule);Set-Acl -LiteralPath $root -AclObject $acl"
         )
         for root in roots:
-            result = self.runner.run([shell, "-NoProfile", "-NonInteractive", "-Command", script, str(root), group], self.config.repo, check=False)
+            result = self.runner.run(
+                [
+                    shell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    script,
+                    str(root),
+                    group,
+                ],
+                self.config.repo,
+                check=False,
+            )
             if result.returncode != 0:
-                raise FlowError(f"Codex ACL setup failed for {root}; correct permissions and retry.")
+                raise FlowError(
+                    f"Codex ACL setup failed for {root}; correct permissions and retry."
+                )
 
 
 def implementation_prompt(worktree: Path, plan: Path, harness_dir: Path) -> str:
-    rel_plan = plan.relative_to(worktree).as_posix() if plan.is_relative_to(worktree) else str(plan)
+    rel_plan = (
+        plan.relative_to(worktree).as_posix()
+        if plan.is_relative_to(worktree)
+        else str(plan)
+    )
     return f"""Use the implement-worktree skill.\n\nImplement the approved plan in `{rel_plan}` inside this worktree.\n\nRequirements:\n- Do not create, switch, merge, delete, or rebase worktrees.\n- Keep edits scoped to the plan.\n- Run focused checks appropriate to the change.\n- Commit the completed implementation.\n- Write `{(harness_dir / 'handoff' / 'implementation-summary.md').as_posix()}` with plan path, worktree, commit SHA, changed files, behavior, checks, assumptions, and risks.\n- Do not commit workflow artifacts.\n"""
 
 
-def audit_prompt(worktree: Path, plan: Path, harness_dir: Path, *, post_conflict: bool) -> str:
-    rel_plan = plan.relative_to(worktree).as_posix() if plan.is_relative_to(worktree) else str(plan)
+def audit_prompt(
+    worktree: Path, plan: Path, harness_dir: Path, *, post_conflict: bool
+) -> str:
+    rel_plan = (
+        plan.relative_to(worktree).as_posix()
+        if plan.is_relative_to(worktree)
+        else str(plan)
+    )
     summary = "post-conflict-audit-summary.md" if post_conflict else "audit-summary.md"
-    finish = "Do not commit; leave integration fixes staged or unstaged." if post_conflict else "Commit audit fixes if changes are made."
+    finish = (
+        "Do not commit; leave integration fixes staged or unstaged."
+        if post_conflict
+        else "Commit audit fixes if changes are made."
+    )
     return f"""Use the audit-worktree skill.\n\nFresh audit pass in this worktree. Read `{rel_plan}` and `{(harness_dir / 'handoff' / 'implementation-summary.md').as_posix()}`.\nAudit the actual diff against the recorded base, fix confirmed issues, and run relevant checks. {finish}\nWrite `{(harness_dir / 'handoff' / summary).as_posix()}` before finishing. Do not commit workflow artifacts.\n"""
 
 
-def conflict_resolution_prompt(worktree: Path, plan: Path, harness_dir: Path, base: str, feature_branch: str) -> str:
-    rel_plan = plan.relative_to(worktree).as_posix() if plan.is_relative_to(worktree) else str(plan)
+def conflict_resolution_prompt(
+    worktree: Path, plan: Path, harness_dir: Path, base: str, feature_branch: str
+) -> str:
+    rel_plan = (
+        plan.relative_to(worktree).as_posix()
+        if plan.is_relative_to(worktree)
+        else str(plan)
+    )
     return f"""Use the merge-conflict-resolver skill.\n\nResolve conflicts in this integration worktree between `{base}` and `{feature_branch}`. Read `{(harness_dir / 'handoff' / 'merge-conflict-context.md').as_posix()}` and `{rel_plan}`. Preserve latest base behavior unless the plan supersedes it, remove all conflict markers, and write `{(harness_dir / 'handoff' / 'conflict-resolution-summary.md').as_posix()}`. Do not commit.\n"""

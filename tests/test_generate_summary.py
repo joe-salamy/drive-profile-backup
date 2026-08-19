@@ -141,7 +141,7 @@ def test_error_spool_rolls_and_preserves_every_error(
     ) as errors:
         error_stream = cast(TextIO, errors)
         stats = summary_script._collect_summary(_config(), error_stream)
-        assert getattr(errors, "_rolled") is True
+        assert errors._rolled is True
         output = StringIO()
         summary_script._write_summary(
             output,

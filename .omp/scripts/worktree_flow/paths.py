@@ -8,8 +8,8 @@ import os
 import re
 import stat
 import uuid
+from collections.abc import Iterator
 from pathlib import Path, PureWindowsPath
-from typing import Iterator
 
 from .models import FlowError
 
@@ -211,7 +211,9 @@ def _temporary_path(parent: Path, name: str) -> tuple[int, Path]:
             return os.open(candidate, flags, 0o600), candidate
         except FileExistsError:
             continue
-    raise FlowError(f"Could not create an exclusive temporary file beside {parent / name}")
+    raise FlowError(
+        f"Could not create an exclusive temporary file beside {parent / name}"
+    )
 
 
 def atomic_write_bytes(
@@ -266,19 +268,30 @@ def atomic_write_bytes(
             pass
 
 
-def atomic_write_text(path: Path, text: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> None:
+def atomic_write_text(
+    path: Path, text: str, *, max_bytes: int = MAX_ARTIFACT_BYTES
+) -> None:
     atomic_write_bytes(path, text.encode("utf-8"), max_bytes=max_bytes)
 
 
-def atomic_write_json(path: Path, payload: object, *, max_bytes: int = MAX_STATE_BYTES) -> None:
+def atomic_write_json(
+    path: Path, payload: object, *, max_bytes: int = MAX_STATE_BYTES
+) -> None:
     try:
-        text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        text = (
+            json.dumps(
+                payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
+            )
+            + "\n"
+        )
     except (TypeError, ValueError) as exc:
         raise FlowError(f"Cannot encode JSON for {path}") from exc
     atomic_write_text(path, text, max_bytes=max_bytes)
 
 
-def safe_copy(source: Path, destination: Path, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> None:
+def safe_copy(
+    source: Path, destination: Path, *, max_bytes: int = MAX_ARTIFACT_BYTES
+) -> None:
     payload = read_bytes_bounded(source, max_bytes=max_bytes)
     atomic_write_bytes(destination, payload, max_bytes=max_bytes)
 
@@ -319,13 +332,17 @@ def safe_rmdir(path: Path) -> None:
         raise FlowError(f"Cannot remove directory: {target}") from exc
 
 
-def iter_bounded_jsonl(path: Path, *, max_line_bytes: int = MAX_JSONL_LINE_BYTES) -> Iterator[bytes]:
+def iter_bounded_jsonl(
+    path: Path, *, max_line_bytes: int = MAX_JSONL_LINE_BYTES
+) -> Iterator[bytes]:
     lstat_regular(path, label="JSONL file")
     try:
         with path.open("rb") as handle:
             for raw in handle:
                 if len(raw) > max_line_bytes:
-                    raise FlowError(f"JSONL line exceeds {max_line_bytes} byte limit: {path}")
+                    raise FlowError(
+                        f"JSONL line exceeds {max_line_bytes} byte limit: {path}"
+                    )
                 yield raw
     except OSError as exc:
         raise FlowError(f"Cannot read JSONL file: {path}") from exc
@@ -373,7 +390,11 @@ def derive_slug(plan_path: Path) -> str:
 
 
 def validate_identifier(value: str, *, label: str) -> str:
-    if not isinstance(value, str) or not value or _IDENTIFIER_RE.fullmatch(value) is None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or _IDENTIFIER_RE.fullmatch(value) is None
+    ):
         raise FlowError(
             f"Invalid {label}: expected lowercase basename identifier matching "
             r"[a-z0-9]+(?:-[a-z0-9]+)*."
@@ -394,21 +415,31 @@ def timestamped_run_id(slug: str, *, stamp: str | None = None) -> str:
 def validate_harness_dir(value: str | Path) -> Path:
     raw = str(value)
     if not raw or any(ord(char) < 32 or ord(char) == 127 for char in raw):
-        raise FlowError("--harness-dir must be a nonempty safe repository-relative path.")
+        raise FlowError(
+            "--harness-dir must be a nonempty safe repository-relative path."
+        )
     if ":" in raw:
-        raise FlowError("--harness-dir cannot contain a drive or alternate-data-stream colon.")
+        raise FlowError(
+            "--harness-dir cannot contain a drive or alternate-data-stream colon."
+        )
     windows = PureWindowsPath(raw.replace("/", "\\"))
     if windows.is_absolute() or windows.drive or raw.startswith(("/", "\\")):
-        raise FlowError("--harness-dir must be repository-relative, not absolute or UNC.")
+        raise FlowError(
+            "--harness-dir must be repository-relative, not absolute or UNC."
+        )
     if re.search(r"[/\\]{2,}", raw) or raw.endswith(("/", "\\")):
         raise FlowError("--harness-dir cannot contain empty path components.")
     parts = tuple(part for part in re.split(r"[/\\]", raw) if part)
     if not parts or any(part in {".", ".."} for part in parts):
-        raise FlowError("--harness-dir cannot contain empty, dot, or parent components.")
+        raise FlowError(
+            "--harness-dir cannot contain empty, dot, or parent components."
+        )
     for part in parts:
         stem = part.split(".", 1)[0].upper()
         if stem in _WINDOWS_RESERVED:
-            raise FlowError(f"--harness-dir contains reserved Windows device component: {part}")
+            raise FlowError(
+                f"--harness-dir contains reserved Windows device component: {part}"
+            )
     normalized = Path(*parts)
     if normalized.is_absolute() or normalized == Path("."):
         raise FlowError("--harness-dir must be nonempty and relative.")
@@ -419,7 +450,11 @@ def default_state_root(repo_root: Path, git_common_dir: Path) -> Path:
     canonical_repo = canonical_path(repo_root, must_exist=True)
     common = canonical_path(git_common_dir, must_exist=True)
     digest = hashlib.sha256(str(common).encode("utf-8")).hexdigest()[:12]
-    return canonical_repo.parent / ".worktree-flow-state" / f"{canonical_repo.name}-{digest}"
+    return (
+        canonical_repo.parent
+        / ".worktree-flow-state"
+        / f"{canonical_repo.name}-{digest}"
+    )
 
 
 def ensure_outside_roots(path: Path, roots: list[Path], *, label: str) -> Path:
@@ -451,6 +486,8 @@ def regular_directory_entries(path: Path) -> list[Path]:
         if stat.S_ISLNK(info.st_mode) or _is_reparse_point(info):
             raise FlowError(f"Refusing symlink or reparse-point entry: {entry}")
     return entries
+
+
 def infer_default_harness_dir(entrypoint_path: Path) -> Path:
     script = canonical_path(entrypoint_path, must_exist=False)
     parent_name = script.parent.parent.name

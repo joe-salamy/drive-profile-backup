@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-import drive_backup.machine_state as machine_state
+from drive_backup import machine_state
 from drive_backup.machine_state import (
     CollectorStatus,
     collect_machine_state,

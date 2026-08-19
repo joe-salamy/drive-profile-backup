@@ -50,10 +50,9 @@ class HarnessKind(StrEnum):
     OPENCODE = "opencode"
 
     @classmethod
-    def from_executable(cls, executable: str) -> "HarnessKind":
+    def from_executable(cls, executable: str) -> HarnessKind:
         name = Path(executable).name.lower()
-        if name.endswith(".exe"):
-            name = name[:-4]
+        name = name.removesuffix(".exe")
         try:
             return cls(name)
         except ValueError as exc:
@@ -85,7 +84,6 @@ class Names:
     run_id: str
     integration_branch: str | None = None
     integration_worktree: Path | None = None
-
 
 
 @dataclass(frozen=True)

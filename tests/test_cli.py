@@ -6,6 +6,7 @@ import sys
 import types
 from collections.abc import Callable
 from pathlib import Path
+from typing import Self
 
 import pytest
 
@@ -61,7 +62,7 @@ class TestCliHumanSize:
 
 class TestCliMain:
     def test_dry_run_progress_enters_before_scanning_with_indeterminate_total(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         events: list[object] = []
 
@@ -77,7 +78,7 @@ class TestCliMain:
             def __init__(self, *args: object, **kwargs: object) -> None:
                 pass
 
-            def __enter__(self) -> "FakeProgress":
+            def __enter__(self) -> Self:
                 events.append("progress_enter")
                 return self
 
@@ -155,16 +156,16 @@ class TestCliMain:
         console_module = types.ModuleType("rich.console")
         progress_module = types.ModuleType("rich.progress")
         table_module = types.ModuleType("rich.table")
-        setattr(console_module, "Console", FakeConsole)
-        setattr(progress_module, "Progress", FakeProgress)
-        setattr(progress_module, "BarColumn", FakeColumn)
-        setattr(progress_module, "MofNCompleteColumn", FakeColumn)
-        setattr(progress_module, "TextColumn", FakeColumn)
-        setattr(progress_module, "TimeElapsedColumn", FakeColumn)
-        setattr(table_module, "Table", FakeTable)
-        setattr(rich_module, "console", console_module)
-        setattr(rich_module, "progress", progress_module)
-        setattr(rich_module, "table", table_module)
+        console_module.Console = FakeConsole
+        progress_module.Progress = FakeProgress
+        progress_module.BarColumn = FakeColumn
+        progress_module.MofNCompleteColumn = FakeColumn
+        progress_module.TextColumn = FakeColumn
+        progress_module.TimeElapsedColumn = FakeColumn
+        table_module.Table = FakeTable
+        rich_module.console = console_module
+        rich_module.progress = progress_module
+        rich_module.table = table_module
 
         monkeypatch.setitem(sys.modules, "rich", rich_module)
         monkeypatch.setitem(sys.modules, "rich.console", console_module)
@@ -187,7 +188,7 @@ class TestCliMain:
         ]
 
     def test_dry_run_completes(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         (tmp_path / "test.txt").write_text("hello")
         (tmp_path / "config.yaml").write_text(
@@ -204,8 +205,8 @@ class TestCliMain:
     def test_manifest_failure_is_concise(
         self,
         tmp_path: Path,
-        monkeypatch: "pytest.MonkeyPatch",
-        capsys: "pytest.CaptureFixture[str]",
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text('{"version": 2, "files": {}}', encoding="utf-8")
@@ -225,7 +226,7 @@ class TestCliMain:
         assert "Backup failed:" in capsys.readouterr().out
 
     def test_verbose_dry_run(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         (tmp_path / "test.txt").write_text("hello")
         (tmp_path / "config.yaml").write_text(
@@ -257,7 +258,7 @@ class TestCliMain:
     def test_prune_flag_is_passed_to_engine(
         self,
         tmp_path: Path,
-        monkeypatch: "pytest.MonkeyPatch",
+        monkeypatch: pytest.MonkeyPatch,
         extra_args: list[str],
         expected_collection: bool,
     ) -> None:
@@ -310,7 +311,7 @@ class TestCliMain:
         }
 
     def test_prune_trash_passes_trash_mode_to_engine(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         captured: dict[str, bool | str] = {}
         config = Config(
@@ -380,8 +381,8 @@ class TestCliMain:
     def test_restore_prints_summary_without_constructing_engine(
         self,
         tmp_path: Path,
-        monkeypatch: "pytest.MonkeyPatch",
-        capsys: "pytest.CaptureFixture[str]",
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         config = Config(
             profile_name="laptop-a",

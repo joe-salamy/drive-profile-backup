@@ -6,9 +6,9 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
+from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 from drive_backup.drive_api import DriveAPI, RateLimiter, _escape_drive_query_value
-from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 
 def _http_error(status: int) -> HttpError:

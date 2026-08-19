@@ -385,7 +385,7 @@ class TestScanner:
     def test_windows_long_path_keeps_manifest_identity(
         self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
     ) -> None:
-        import drive_backup.scanner as scanner
+        from drive_backup import scanner
 
         long_name = f"{'a' * 40}.txt"
         (tmp_path / long_name).write_text("content")

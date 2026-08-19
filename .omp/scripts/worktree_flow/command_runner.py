@@ -7,10 +7,10 @@ import shlex
 import shutil
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
 
 from .models import FlowError
 
@@ -165,7 +165,9 @@ class CommandRunner:
                 raise CommandFailureError(result) from exc
             return result
         except OSError as exc:
-            raise FlowError(f"Failed to run command: {display}\ncwd: {cwd}\n{exc}") from exc
+            raise FlowError(
+                f"Failed to run command: {display}\ncwd: {cwd}\n{exc}"
+            ) from exc
 
         result = CommandResult(
             normalized,

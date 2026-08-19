@@ -7,6 +7,5 @@ from pathlib import Path
 
 from worktree_flow.cli import main
 
-
 if __name__ == "__main__":
     raise SystemExit(main(entrypoint_path=Path(__file__).resolve()))

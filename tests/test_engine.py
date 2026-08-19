@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,7 +11,6 @@ import pytest
 import drive_backup.engine as engine_module
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, compute_md5
-from drive_backup.machine_state import CollectorOutcome, CollectorStatus
 from drive_backup.engine import (
     BackupEngine,
     ManifestProgressError,
@@ -18,6 +18,7 @@ from drive_backup.engine import (
     ProgressKind,
     _format_mtime,
 )
+from drive_backup.machine_state import CollectorOutcome, CollectorStatus
 from drive_backup.scanner import FileEntry
 from tests.file_helpers import write_tree
 
@@ -241,7 +242,7 @@ class TestBackupEngineDryRun:
 
 class TestBackupEngineMachineState:
     def test_collection_runs_after_manifest_load_before_drive_and_scan(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         events: list[str] = []
         backup_root = tmp_path / "backup"
@@ -292,7 +293,7 @@ class TestBackupEngineMachineState:
         assert events[:4] == ["manifest", "collect", "authenticate", "scan"]
 
     def test_dry_run_refreshes_and_scans_generated_json(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         backup_root.mkdir()
@@ -355,7 +356,7 @@ class TestBackupEngineMachineState:
         )
 
     def test_failed_collector_is_reported_without_file_error(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         backup_root.mkdir()
@@ -388,7 +389,7 @@ class TestBackupEngineMachineState:
         assert report["machine_state_collectors"][0]["status"] == "failed"
 
     def test_unexpected_refresh_failure_continues_and_protects_prune(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         backup_root.mkdir()
@@ -433,7 +434,7 @@ class TestBackupEngineMachineState:
         assert report["files_pruned"] == 0
 
     def test_enabled_failed_collector_is_prune_protected_but_disabled_is_pruned(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
             def __init__(self) -> None:
@@ -745,7 +746,7 @@ class TestBackupEngineUploadErrors:
         assert Manifest.load(str(manifest_path)).get("old/file.txt") is None
 
     def test_manifest_progress_save_failure_aborts_run(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         state_dir = tmp_path / "state"
@@ -809,7 +810,7 @@ class TestBackupEngineUploadErrors:
         assert len(upload_calls) == 1
 
     def test_report_upload_error_does_not_fail_backup(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
             def authenticate(self) -> None:
@@ -841,10 +842,10 @@ class TestBackupEngineUploadErrors:
         assert report["files_scanned"] == 0
 
     def test_prune_skipped_when_backup_has_errors(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
-            trash_calls: list[str] = []
+            trash_calls: ClassVar[list[str]] = []
 
             def authenticate(self) -> None:
                 pass
@@ -932,7 +933,7 @@ class TestBackupEngineProfileFolders:
 
 class TestBackupEnginePrune:
     def test_prune_success_trashes_drive_file_and_removes_manifest(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
             def __init__(self) -> None:
@@ -993,7 +994,7 @@ class TestBackupEnginePrune:
         assert Manifest.load(str(manifest_path)).get("old/file.txt") is None
 
     def test_prune_skips_when_backup_root_is_missing(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
             def __init__(self) -> None:
@@ -1063,7 +1064,7 @@ class TestBackupEnginePrune:
         ]
 
     def test_prune_failure_keeps_manifest_entry(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
             def authenticate(self) -> None:
@@ -1120,7 +1121,7 @@ class TestBackupEnginePrune:
         assert Manifest.load(str(manifest_path)).get("old/file.txt") is not None
 
     def test_prune_flag_mode_marks_entry_and_keeps_manifest(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
             def __init__(self) -> None:
@@ -1189,7 +1190,7 @@ class TestBackupEnginePrune:
         assert entry.pruned is True
 
     def test_prune_flag_mode_second_run_reports_zero(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
             def __init__(self) -> None:
@@ -1259,7 +1260,7 @@ class TestBackupEnginePrune:
         assert entry.pruned is True
 
     def test_prune_flag_mode_restored_file_reuploads_and_clears_flag(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeDrive:
             def __init__(self) -> None:
@@ -1344,7 +1345,7 @@ class TestBackupEngineManifestSnapshot:
         )
 
     def test_upload_creates_snapshot_when_missing(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         state_dir = tmp_path / "state"
@@ -1402,7 +1403,7 @@ class TestBackupEngineManifestSnapshot:
         assert (str(manifest_path), "_meta_id") in upload_calls
 
     def test_upload_updates_existing_snapshot(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         state_dir = tmp_path / "state"
@@ -1448,7 +1449,7 @@ class TestBackupEngineManifestSnapshot:
         assert update_calls == ["snapshot_id"]
 
     def test_upload_failure_is_non_fatal(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         state_dir = tmp_path / "state"
@@ -1495,7 +1496,7 @@ class TestBackupEngineManifestSnapshot:
         assert "snapshot upload failed" in report["manifest_snapshot_error"]
 
     def test_download_restores_missing_local_manifest(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         state_dir = tmp_path / "state"
@@ -1558,7 +1559,7 @@ class TestBackupEngineManifestSnapshot:
         assert report["files_uploaded"] == 0
 
     def test_dry_run_performs_no_snapshot_operations(
-        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         backup_root.mkdir()

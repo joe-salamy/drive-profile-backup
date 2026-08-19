@@ -10,8 +10,8 @@ from drive_backup.machine_state import CollectorOutcome, CollectorStatus
 from drive_backup.report import (
     BackupStats,
     ErrorFile,
-    PruneError,
     PrunedFile,
+    PruneError,
     SkippedFile,
     generate_report,
     save_report,
