@@ -137,14 +137,14 @@ def lstat_regular(path: Path, *, label: str = "file") -> os.stat_result:
 def optional_regular_file(path: Path, *, label: str = "file") -> bool:
     try:
         lstat_regular(path, label=label)
-    except FlowError as exc:
+    except FlowError:
         try:
             path.lstat()
         except FileNotFoundError:
             return False
         except OSError as inspect_exc:
             raise FlowError(f"Cannot inspect {label}: {path}") from inspect_exc
-        raise exc
+        raise
     return True
 
 
@@ -406,7 +406,7 @@ def timestamped_run_id(slug: str, *, stamp: str | None = None) -> str:
     from datetime import datetime
 
     safe_slug = validate_identifier(slug, label="slug")
-    timestamp = stamp or datetime.now().strftime(RUN_ID_TIMESTAMP_FORMAT)
+    timestamp = stamp or datetime.now().astimezone().strftime(RUN_ID_TIMESTAMP_FORMAT)
     if re.fullmatch(r"\d{8}-\d{6}", timestamp) is None:
         raise FlowError(f"Invalid run timestamp: {timestamp}")
     return validate_identifier(f"{timestamp}-{safe_slug}", label="run id")

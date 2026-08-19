@@ -9,6 +9,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Self
 
 from .models import STATE_FIELDS, FlowError, WorkflowStage, WorkflowState
 from .paths import (
@@ -40,8 +41,7 @@ def _require_branch_text(value: object, *, label: str) -> str:
     if (
         not isinstance(value, str)
         or not value
-        or value.startswith("-")
-        or value.startswith(("refs/", "origin/"))
+        or value.startswith(("-", "refs/", "origin/"))
         or any(ord(char) < 32 or ord(char) == 127 for char in value)
         or any(char.isspace() for char in value)
     ):
@@ -211,7 +211,7 @@ class RunLock:
         finally:
             handle.close()  # type: ignore[union-attr]
 
-    def __enter__(self) -> RunLock:
+    def __enter__(self) -> Self:
         self.acquire()
         return self
 
@@ -412,26 +412,22 @@ class WorkflowStateStore:
         if fingerprint is not None:
             _require_hex64(fingerprint, label="integration_worktree_fingerprint")
         timeout = data["command_timeout_seconds"]
-        if timeout is not None:
-            if (
-                isinstance(timeout, bool)
-                or not isinstance(timeout, (int, float))
-                or not math.isfinite(float(timeout))
-                or timeout <= 0
-            ):
-                raise FlowError(
-                    "Workflow state command_timeout_seconds has the wrong type."
-                )
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(float(timeout))
+            or timeout <= 0
+        ):
+            raise FlowError(
+                "Workflow state command_timeout_seconds has the wrong type."
+            )
         for field in ("integration_worktree", "archive_dir"):
             value = data[field]
-            if value is not None:
-                if (
-                    not Path(value).is_absolute()
-                    or str(canonical_path(Path(value), must_exist=False)) != value
-                ):
-                    raise FlowError(
-                        f"Workflow state path field {field} is not canonical."
-                    )
+            if value is not None and (
+                not Path(value).is_absolute()
+                or str(canonical_path(Path(value), must_exist=False)) != value
+            ):
+                raise FlowError(f"Workflow state path field {field} is not canonical.")
         if not isinstance(data["keep_worktrees"], bool):
             raise FlowError("Workflow state keep_worktrees must be boolean.")
         stage_value = data["stage"]

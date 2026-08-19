@@ -240,7 +240,7 @@ class HarnessWorktreeFlow:
                         f"Completed workflow run already owns this plan; use --resume: {candidate.run_id}"
                     )
         existing_worktrees = {entry.path for entry in self.git.worktrees()}
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         for suffix in range(1, 1000):
             candidate_slug = slug if suffix == 1 else f"{slug}-{suffix}"
             branch = f"feature/{candidate_slug}"
@@ -340,7 +340,7 @@ class HarnessWorktreeFlow:
         if self.log_file is None or self.runner.dry_run:
             return
         record: dict[str, object] = {
-            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"),
             "event": event,
             **fields,
         }
@@ -658,7 +658,7 @@ class HarnessWorktreeFlow:
         assert self.git is not None
         if state.stage is WorkflowStage.AUDIT_COMPLETE:
             self.git.require_primary_ready(state.base_branch)
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
             branch = f"integration/{state.slug}-{stamp}"
             path = (
                 self.repo.parent / f"{self.repo.name}-integrate-{state.slug}-{stamp}"
@@ -1113,12 +1113,10 @@ class HarnessWorktreeFlow:
             raise FlowError(
                 f"Generated integration worktree is not registered at the recorded path: {target}"
             )
-        if self.git.branch_exists(state.integration_branch):
-            if (
-                self.git.branch_tip(state.integration_branch)
-                != state.integration_commit
-            ):
-                raise FlowError("Integration branch changed before rebuild cleanup.")
+        if self.git.branch_exists(state.integration_branch) and (
+            self.git.branch_tip(state.integration_branch) != state.integration_commit
+        ):
+            raise FlowError("Integration branch changed before rebuild cleanup.")
         self._remove_or_adopt_worktree(
             target,
             state.integration_branch,

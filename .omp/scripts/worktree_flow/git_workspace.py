@@ -163,8 +163,7 @@ class GitWorkspace:
         if (
             not isinstance(name, str)
             or not name
-            or name.startswith("-")
-            or name.startswith(("refs/", "origin/"))
+            or name.startswith(("-", "refs/", "origin/"))
         ):
             raise FlowError(f"Invalid local branch name: {name!r}")
         check = self._run(
@@ -249,9 +248,8 @@ class GitWorkspace:
             flow = self.worktree_flow_rel
         return (
             normalized == handoff
-            or normalized.startswith(f"{handoff}/")
             or normalized == flow
-            or normalized.startswith(f"{flow}/")
+            or normalized.startswith((f"{handoff}/", f"{flow}/"))
         )
 
     def tracked_handoff_paths(

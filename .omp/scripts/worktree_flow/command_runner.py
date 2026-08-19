@@ -45,7 +45,7 @@ class CommandFailureError(FlowError):
 
 
 def now_iso() -> str:
-    return datetime.now().isoformat(timespec="milliseconds")
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 def logged_command(args: Sequence[str]) -> list[str]:
