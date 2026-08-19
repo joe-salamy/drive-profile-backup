@@ -227,7 +227,11 @@ class TestBackupEngineDryRun:
         )
 
         report = BackupEngine(
-            config, dry_run=True, prune=True, collect_machine_state_snapshot=False
+            config,
+            dry_run=True,
+            prune=True,
+            prune_mode="trash",
+            collect_machine_state_snapshot=False,
         ).run()
 
         assert report["files_pruned"] == 1
@@ -493,7 +497,7 @@ class TestBackupEngineMachineState:
         drive = FakeDrive()
         monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: drive)
 
-        report = BackupEngine(config, prune=True).run()
+        report = BackupEngine(config, prune=True, prune_mode="trash").run()
 
         assert drive.trash_calls == ["services_drive"]
         assert report["files_pruned"] == 1
@@ -725,7 +729,11 @@ class TestBackupEngineUploadErrors:
             manifest_path=str(manifest_path),
         )
         engine = BackupEngine(
-            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+            config,
+            dry_run=False,
+            prune=True,
+            prune_mode="trash",
+            collect_machine_state_snapshot=False,
         )
         engine.manifest = Manifest.load(str(manifest_path))
         mock_drive = MagicMock()
@@ -886,7 +894,11 @@ class TestBackupEngineUploadErrors:
         )
 
         report = BackupEngine(
-            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+            config,
+            dry_run=False,
+            prune=True,
+            prune_mode="trash",
+            collect_machine_state_snapshot=False,
         ).run()
 
         assert (
@@ -969,7 +981,11 @@ class TestBackupEnginePrune:
         )
 
         report = BackupEngine(
-            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+            config,
+            dry_run=False,
+            prune=True,
+            prune_mode="trash",
+            collect_machine_state_snapshot=False,
         ).run()
 
         assert fake_drive.trash_calls == ["drive_old"]
@@ -1091,10 +1107,474 @@ class TestBackupEnginePrune:
         )
 
         report = BackupEngine(
-            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+            config,
+            dry_run=False,
+            prune=True,
+            prune_mode="trash",
+            collect_machine_state_snapshot=False,
         ).run()
 
         assert report["files_pruned"] == 0
         assert report["files_prune_failed"] == 1
         assert report["prune_error_files"][0]["error"] == "trash failed"
         assert Manifest.load(str(manifest_path)).get("old/file.txt") is not None
+
+    def test_prune_flag_mode_marks_entry_and_keeps_manifest(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        class FakeDrive:
+            def __init__(self) -> None:
+                self.trash_calls: list[str] = []
+
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def find_file_by_name_and_parent(
+                self, name: str, parent_id: str
+            ) -> dict[str, str] | None:
+                return None
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": "uploaded_id", "md5Checksum": "md5"}
+
+            def update_file(
+                self, file_id: str, local_path: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": file_id, "md5Checksum": "md5"}
+
+            def trash_file(self, file_id: str) -> dict[str, str]:
+                self.trash_calls.append(file_id)
+                return {"id": file_id}
+
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        backup_root.mkdir()
+        state_dir.mkdir()
+        manifest_path = state_dir / "manifest.json"
+        manifest = Manifest()
+        manifest.set(
+            relative_path="old/file.txt",
+            md5="abc",
+            size=10,
+            mtime=1.0,
+            drive_file_id="drive_old",
+            drive_parent_id="parent",
+        )
+        manifest.save(str(manifest_path))
+        fake_drive = FakeDrive()
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: fake_drive)
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
+
+        report = BackupEngine(
+            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+        ).run()
+
+        assert fake_drive.trash_calls == []
+        assert report["files_pruned"] == 1
+        entry = Manifest.load(str(manifest_path)).get("old/file.txt")
+        assert entry is not None
+        assert entry.pruned is True
+
+    def test_prune_flag_mode_second_run_reports_zero(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        class FakeDrive:
+            def __init__(self) -> None:
+                self.trash_calls: list[str] = []
+
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def find_file_by_name_and_parent(
+                self, name: str, parent_id: str
+            ) -> dict[str, str] | None:
+                return None
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": "uploaded_id", "md5Checksum": "md5"}
+
+            def update_file(
+                self, file_id: str, local_path: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": file_id, "md5Checksum": "md5"}
+
+            def trash_file(self, file_id: str) -> dict[str, str]:
+                self.trash_calls.append(file_id)
+                return {"id": file_id}
+
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        backup_root.mkdir()
+        state_dir.mkdir()
+        manifest_path = state_dir / "manifest.json"
+        manifest = Manifest()
+        manifest.set(
+            relative_path="old/file.txt",
+            md5="abc",
+            size=10,
+            mtime=1.0,
+            drive_file_id="drive_old",
+            drive_parent_id="parent",
+            pruned=True,
+        )
+        manifest.save(str(manifest_path))
+        fake_drive = FakeDrive()
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: fake_drive)
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
+
+        report = BackupEngine(
+            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+        ).run()
+
+        assert fake_drive.trash_calls == []
+        assert report["files_pruned"] == 0
+        entry = Manifest.load(str(manifest_path)).get("old/file.txt")
+        assert entry is not None
+        assert entry.pruned is True
+
+    def test_prune_flag_mode_restored_file_reuploads_and_clears_flag(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        class FakeDrive:
+            def __init__(self) -> None:
+                self.trash_calls: list[str] = []
+                self.update_calls: list[str] = []
+
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def find_file_by_name_and_parent(
+                self, name: str, parent_id: str
+            ) -> dict[str, str] | None:
+                return None
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": "uploaded_id", "md5Checksum": "md5"}
+
+            def update_file(
+                self, file_id: str, local_path: str, resumable: bool = False
+            ) -> dict[str, str]:
+                self.update_calls.append(file_id)
+                return {"id": file_id, "md5Checksum": "md5"}
+
+            def trash_file(self, file_id: str) -> dict[str, str]:
+                self.trash_calls.append(file_id)
+                return {"id": file_id}
+
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        backup_root.mkdir()
+        state_dir.mkdir()
+        (backup_root / "file.txt").write_text("new content", encoding="utf-8")
+        manifest_path = state_dir / "manifest.json"
+        manifest = Manifest()
+        manifest.set(
+            relative_path="file.txt",
+            md5="old_md5",
+            size=1,
+            mtime=1.0,
+            drive_file_id="drive_file",
+            drive_parent_id="parent",
+            pruned=True,
+        )
+        manifest.save(str(manifest_path))
+        fake_drive = FakeDrive()
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: fake_drive)
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
+
+        report = BackupEngine(
+            config, dry_run=False, prune=True, collect_machine_state_snapshot=False
+        ).run()
+
+        assert fake_drive.update_calls == ["drive_file"]
+        assert fake_drive.trash_calls == []
+        assert report["files_pruned"] == 0
+        entry = Manifest.load(str(manifest_path)).get("file.txt")
+        assert entry is not None
+        assert entry.pruned is False
+
+
+class TestBackupEngineManifestSnapshot:
+    def _config(self, tmp_path: Path, manifest_path: Path) -> Config:
+        return Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path / "backup"),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+        )
+
+    def test_upload_creates_snapshot_when_missing(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        backup_root.mkdir()
+        state_dir.mkdir()
+        (backup_root / "file.txt").write_text("data", encoding="utf-8")
+        manifest_path = state_dir / "manifest.json"
+        manifest = Manifest()
+        stat = (backup_root / "file.txt").stat()
+        manifest.set(
+            relative_path="file.txt",
+            md5="abc",
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+            drive_file_id="drive_file",
+            drive_parent_id="parent",
+        )
+        manifest.save(str(manifest_path))
+
+        upload_calls: list[tuple[str, str]] = []
+
+        class FakeDrive:
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def find_file_by_name_and_parent(
+                self, name: str, parent_id: str
+            ) -> dict[str, str] | None:
+                return None
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                upload_calls.append((local_path, parent_id))
+                return {"id": "uploaded_id", "md5Checksum": "md5"}
+
+            def update_file(
+                self, file_id: str, local_path: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": file_id, "md5Checksum": "md5"}
+
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
+        config = self._config(tmp_path, manifest_path)
+
+        report = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        ).run()
+
+        assert report["manifest_snapshot_uploaded"] is True
+        assert (str(manifest_path), "_meta_id") in upload_calls
+
+    def test_upload_updates_existing_snapshot(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        backup_root.mkdir()
+        state_dir.mkdir()
+        manifest_path = state_dir / "manifest.json"
+        Manifest().save(str(manifest_path))
+        update_calls: list[str] = []
+
+        class FakeDrive:
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def find_file_by_name_and_parent(
+                self, name: str, parent_id: str
+            ) -> dict[str, str] | None:
+                return {"id": "snapshot_id"}
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": "uploaded_id", "md5Checksum": "md5"}
+
+            def update_file(
+                self, file_id: str, local_path: str, resumable: bool = False
+            ) -> dict[str, str]:
+                update_calls.append(file_id)
+                return {"id": file_id, "md5Checksum": "md5"}
+
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
+        config = self._config(tmp_path, manifest_path)
+
+        report = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        ).run()
+
+        assert report["manifest_snapshot_uploaded"] is True
+        assert update_calls == ["snapshot_id"]
+
+    def test_upload_failure_is_non_fatal(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        backup_root.mkdir()
+        state_dir.mkdir()
+        manifest_path = state_dir / "manifest.json"
+        Manifest().save(str(manifest_path))
+
+        class FakeDrive:
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def find_file_by_name_and_parent(
+                self, name: str, parent_id: str
+            ) -> dict[str, str] | None:
+                return None
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                if parent_id == "_meta_id":
+                    raise RuntimeError("snapshot upload failed")
+                return {"id": "uploaded_id", "md5Checksum": "md5"}
+
+            def update_file(
+                self, file_id: str, local_path: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": file_id, "md5Checksum": "md5"}
+
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
+        config = self._config(tmp_path, manifest_path)
+
+        report = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        ).run()
+
+        assert report["files_scanned"] == 0
+        assert report["manifest_snapshot_uploaded"] is False
+        assert "snapshot upload failed" in report["manifest_snapshot_error"]
+
+    def test_download_restores_missing_local_manifest(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        backup_root.mkdir()
+        state_dir.mkdir()
+        (backup_root / "file.txt").write_text("data", encoding="utf-8")
+        manifest_path = state_dir / "manifest.json"
+        stat = (backup_root / "file.txt").stat()
+        snapshot = Manifest()
+        snapshot.set(
+            relative_path="file.txt",
+            md5="abc",
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+            drive_file_id="drive_file",
+            drive_parent_id="parent",
+        )
+        snapshot_path = tmp_path / "snapshot.json"
+        snapshot.save(str(snapshot_path))
+        snapshot_bytes = snapshot_path.read_bytes()
+
+        class FakeDrive:
+            def authenticate(self) -> None:
+                pass
+
+            def get_or_create_folder(
+                self, name: str, parent_id: str | None = None
+            ) -> str:
+                return f"{name}_id"
+
+            def find_file_by_name_and_parent(
+                self, name: str, parent_id: str
+            ) -> dict[str, str] | None:
+                return {"id": "snapshot_id"}
+
+            def upload_file(
+                self, local_path: str, parent_id: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": "uploaded_id", "md5Checksum": "md5"}
+
+            def update_file(
+                self, file_id: str, local_path: str, resumable: bool = False
+            ) -> dict[str, str]:
+                return {"id": file_id, "md5Checksum": "md5"}
+
+            def download_file(self, file_id: str, local_path: str) -> None:
+                with open(local_path, "wb") as f:
+                    f.write(snapshot_bytes)
+
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
+        config = self._config(tmp_path, manifest_path)
+
+        report = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        ).run()
+
+        assert report["manifest_snapshot_downloaded"] is True
+        # Manifest came from the snapshot: the unchanged file is dedup-skipped.
+        assert report["files_skipped_dedup"] == 1
+        assert report["files_uploaded"] == 0
+
+    def test_dry_run_performs_no_snapshot_operations(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        backup_root = tmp_path / "backup"
+        backup_root.mkdir()
+        manifest_path = tmp_path / "state" / "manifest.json"
+
+        class FakeDrive:
+            def __init__(self) -> None:
+                raise AssertionError("DriveAPI must not be built in dry-run")
+
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", FakeDrive)
+        config = self._config(tmp_path, manifest_path)
+
+        report = BackupEngine(
+            config, dry_run=True, collect_machine_state_snapshot=False
+        ).run()
+
+        assert report["manifest_snapshot_downloaded"] is False
+        assert report["manifest_snapshot_uploaded"] is False
+        assert report["manifest_snapshot_error"] == ""

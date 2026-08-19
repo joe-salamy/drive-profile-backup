@@ -38,7 +38,29 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--prune",
         action="store_true",
-        help="Move Drive files missing locally to trash and remove them from the manifest",
+        help="Mark Drive files missing locally as pruned in the manifest",
+    )
+    parser.add_argument(
+        "--prune-trash",
+        action="store_true",
+        help="Move stale Drive files to trash and remove them from the manifest "
+        "(default: --prune marks them as pruned)",
+    )
+    parser.add_argument(
+        "--restore",
+        action="store_true",
+        help="Download the latest backup from Drive into --output, "
+        "skipping pruned files",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="PATH",
+        help="Target directory for --restore",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing files during --restore",
     )
     parser.add_argument(
         "--skip-machine-state",
@@ -46,9 +68,17 @@ def main(argv: list[str] | None = None) -> None:
         help="Do not refresh generated machine-state inventories before this backup",
     )
     args = parser.parse_args(argv)
-    if args.full and args.prune:
+    if args.full and (args.prune or args.prune_trash):
         parser.error(
             "--prune cannot be combined with --full because prune needs the existing manifest"
+        )
+    if args.prune and args.prune_trash:
+        parser.error("--prune and --prune-trash are mutually exclusive")
+    if args.restore and not args.output:
+        parser.error("--restore requires --output")
+    if args.restore and (args.full or args.prune or args.prune_trash):
+        parser.error(
+            "--restore cannot be combined with --full, --prune, or --prune-trash"
         )
 
     # Setup logging
@@ -92,19 +122,76 @@ def main(argv: list[str] | None = None) -> None:
     console.print(f"[bold]Backup root:[/] {config.backup_root}")
     console.print(f"[bold]Profile:[/] {config.profile_name}")
 
-    if args.dry_run and args.prune:
+    if args.restore:
+        from rich.table import Table
+
+        from drive_backup.restore import restore_backup
+        from drive_backup.utils import human_size
+
+        console.print(
+            f"[bold]RESTORE - downloading non-pruned files to {args.output}[/]"
+        )
+        try:
+            result = restore_backup(
+                config,
+                args.output,
+                dry_run=args.dry_run,
+                force=args.force,
+            )
+        except RuntimeError as error:
+            console.print(f"[red]Restore failed:[/] {error}")
+            raise SystemExit(1) from error
+
+        table = Table(title="Restore Summary", show_header=False)
+        table.add_column("Key", style="bold")
+        table.add_column("Value")
+        if args.dry_run:
+            table.add_row("Mode", "[yellow]DRY RUN[/]")
+        table.add_row("Profile", result["profile_name"])
+        table.add_row("Output directory", result["output_dir"])
+        table.add_row(
+            "Files to restore" if args.dry_run else "Files restored",
+            str(result["files_restored"]),
+        )
+        table.add_row(
+            "Size to restore" if args.dry_run else "Size restored",
+            human_size(result["bytes_restored"]),
+        )
+        table.add_row("Files skipped (pruned)", str(result["files_skipped_pruned"]))
+        table.add_row("Files skipped (existing)", str(result["files_skipped_existing"]))
+        table.add_row("Files failed", str(result["files_failed"]))
+        console.print(table)
+        if args.verbose and result["errors"]:
+            console.print(f"\n[red]{len(result['errors'])} files failed:[/]")
+            for restore_error in result["errors"]:
+                console.print(
+                    f"  [red]{restore_error['relative_path']}: "
+                    f"{restore_error['error']}[/]"
+                )
+        return
+
+    prune_enabled = args.prune or args.prune_trash
+    prune_mode = "trash" if args.prune_trash else "flag"
+
+    if args.dry_run and prune_enabled:
         console.print("[yellow]DRY RUN - no files will be uploaded or pruned[/]")
     elif args.dry_run:
         console.print("[yellow]DRY RUN - no files will be uploaded[/]")
-    elif args.prune:
+    elif prune_mode == "trash":
         console.print("[yellow]PRUNE - stale Drive files will be moved to trash[/]")
+    elif prune_enabled:
+        console.print(
+            "[yellow]PRUNE - stale Drive files will be marked as pruned "
+            "(use --prune-trash to delete)[/]"
+        )
 
     # Create engine
     engine = BackupEngine(
         config,
         dry_run=args.dry_run,
         full=args.full,
-        prune=args.prune,
+        prune=prune_enabled,
+        prune_mode=prune_mode,
         collect_machine_state_snapshot=not args.skip_machine_state,
     )
 
@@ -202,6 +289,17 @@ def _print_summary(
             report.get("total_size_pruned_human", "0.0 B"),
         )
         table.add_row("Prune failures", str(report.get("files_prune_failed", 0)))
+
+    if not report["dry_run"]:
+        if report["manifest_snapshot_error"]:
+            snapshot_text = f"failed: {report['manifest_snapshot_error']}"
+        elif report["manifest_snapshot_uploaded"]:
+            snapshot_text = "uploaded"
+        elif report["manifest_snapshot_downloaded"]:
+            snapshot_text = "downloaded"
+        else:
+            snapshot_text = "not synced"
+        table.add_row("Manifest snapshot", snapshot_text)
     console.print(table)
     for collector in collector_rows:
         if collector["status"] not in ("partial", "failed"):

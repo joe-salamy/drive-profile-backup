@@ -31,12 +31,16 @@ def _minimal_report(**overrides: object) -> BackupReport:
         "extension_breakdown": [],
         "error_files": [],
         "prune_enabled": False,
+        "prune_mode": "flag",
         "files_pruned": 0,
         "files_prune_failed": 0,
         "total_size_pruned_human": "0.0 B",
         "pruned_files": [],
         "prune_skipped_reason": "",
         "prune_error_files": [],
+        "manifest_snapshot_downloaded": False,
+        "manifest_snapshot_uploaded": False,
+        "manifest_snapshot_error": "",
         "machine_state_refreshed": False,
         "machine_state_collectors": [],
     }
@@ -101,11 +105,13 @@ class TestCliMain:
                 dry_run: bool,
                 full: bool,
                 prune: bool,
+                prune_mode: str,
                 collect_machine_state_snapshot: bool,
             ) -> None:
                 assert dry_run is True
                 assert full is False
                 assert prune is False
+                assert prune_mode == "flag"
                 assert collect_machine_state_snapshot is True
 
             def run(
@@ -255,7 +261,7 @@ class TestCliMain:
         extra_args: list[str],
         expected_collection: bool,
     ) -> None:
-        captured: dict[str, bool] = {}
+        captured: dict[str, bool | str] = {}
         config = Config(
             profile_name="laptop-a",
             backup_root=str(tmp_path),
@@ -272,11 +278,13 @@ class TestCliMain:
                 dry_run: bool,
                 full: bool,
                 prune: bool,
+                prune_mode: str,
                 collect_machine_state_snapshot: bool,
             ) -> None:
                 captured["dry_run"] = dry_run
                 captured["full"] = full
                 captured["prune"] = prune
+                captured["prune_mode"] = prune_mode
                 captured["collect_machine_state_snapshot"] = (
                     collect_machine_state_snapshot
                 )
@@ -297,8 +305,123 @@ class TestCliMain:
             "dry_run": True,
             "full": False,
             "prune": True,
+            "prune_mode": "flag",
             "collect_machine_state_snapshot": expected_collection,
         }
+
+    def test_prune_trash_passes_trash_mode_to_engine(
+        self, tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        captured: dict[str, bool | str] = {}
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
+
+        class FakeBackupEngine:
+            def __init__(
+                self,
+                config: Config,
+                *,
+                dry_run: bool,
+                full: bool,
+                prune: bool,
+                prune_mode: str,
+                collect_machine_state_snapshot: bool,
+            ) -> None:
+                captured["dry_run"] = dry_run
+                captured["full"] = full
+                captured["prune"] = prune
+                captured["prune_mode"] = prune_mode
+
+            def run(
+                self,
+                *,
+                progress_callback: Callable[[object, ProgressEvent], None],
+            ) -> BackupReport:
+                return _minimal_report(
+                    dry_run=True, prune_enabled=True, prune_mode="trash"
+                )
+
+        monkeypatch.setattr("drive_backup.config.load_config", lambda path: config)
+        monkeypatch.setattr("drive_backup.engine.BackupEngine", FakeBackupEngine)
+
+        main(["--dry-run", "--prune-trash"])
+
+        assert captured == {
+            "dry_run": True,
+            "full": False,
+            "prune": True,
+            "prune_mode": "trash",
+        }
+
+    def test_prune_and_prune_trash_are_mutually_exclusive(self) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--prune", "--prune-trash"])
+
+        assert exc_info.value.code != 0
+
+    def test_restore_requires_output(self) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--restore"])
+
+        assert exc_info.value.code != 0
+
+    def test_restore_rejects_backup_flags(self) -> None:
+        for conflicting in (["--full"], ["--prune"], ["--prune-trash"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main(["--restore", "--output", "/tmp/out", *conflicting])
+
+            assert exc_info.value.code != 0
+
+    def test_restore_prints_summary_without_constructing_engine(
+        self,
+        tmp_path: Path,
+        monkeypatch: "pytest.MonkeyPatch",
+        capsys: "pytest.CaptureFixture[str]",
+    ) -> None:
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
+        output_dir = tmp_path / "restored"
+        result = {
+            "profile_name": "laptop-a",
+            "output_dir": str(output_dir),
+            "files_total": 3,
+            "files_restored": 1,
+            "files_skipped_pruned": 1,
+            "files_skipped_existing": 1,
+            "files_failed": 0,
+            "bytes_restored": 2048,
+            "pruned_files": ["old/gone.txt"],
+            "errors": [],
+        }
+
+        class FakeBackupEngine:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                raise AssertionError("engine must not be built during restore")
+
+        monkeypatch.setattr("drive_backup.config.load_config", lambda path: config)
+        monkeypatch.setattr("drive_backup.engine.BackupEngine", FakeBackupEngine)
+        monkeypatch.setattr(
+            "drive_backup.restore.restore_backup",
+            lambda config, output_dir, dry_run=False, force=False: result,
+        )
+
+        main(["--restore", "--output", str(output_dir)])
+
+        output = capsys.readouterr().out
+        assert "RESTORE - downloading non-pruned files" in output
+        assert "Files restored" in output
+        assert "Files skipped (pruned)" in output
+        assert "Files skipped (existing)" in output
 
     def test_verbose_prune_lists_all_would_prune_files(self) -> None:
         from rich.console import Console

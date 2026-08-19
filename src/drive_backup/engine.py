@@ -67,18 +67,23 @@ class BackupEngine:
         dry_run: bool = False,
         full: bool = False,
         prune: bool = False,
+        prune_mode: str = "flag",
         collect_machine_state_snapshot: bool = True,
     ) -> None:
+        if prune_mode not in ("flag", "trash"):
+            raise ValueError("prune_mode must be 'flag' or 'trash'")
         self.config = config
         self.dry_run = dry_run
         self.full = full  # Ignore manifest, re-upload everything
         self.prune = prune
+        self.prune_mode = prune_mode
         self.collect_machine_state_snapshot = collect_machine_state_snapshot
         self.stats = BackupStats(
             backup_root=config.backup_root,
             dry_run=dry_run,
             profile_name=config.profile_name,
             prune_enabled=prune,
+            prune_mode=prune_mode,
         )
         self.manifest = Manifest()
         self.drive: DriveAPI | None = None  # Lazy: imported only when needed
@@ -171,6 +176,7 @@ class BackupEngine:
             self.stats.drive_folder_url = (
                 f"https://drive.google.com/drive/folders/{self._root_folder_id}"
             )
+            self._maybe_download_manifest_snapshot()
 
         # Scan and process files
         for file_entry in scan(self.config):
@@ -198,6 +204,7 @@ class BackupEngine:
         # Save manifest
         if not self.dry_run:
             self.manifest.save(self.config.manifest_path)
+            self._upload_manifest_snapshot()
 
         # Generate report
         report = generate_report(self.stats)
@@ -243,6 +250,52 @@ class BackupEngine:
             self.manifest.save(self.config.manifest_path)
         except Exception as e:
             raise ManifestProgressError("Could not save manifest progress") from e
+
+    def _upload_manifest_snapshot(self) -> None:
+        """Upload the local manifest as a snapshot to Drive/_meta/manifest.json."""
+        if self.drive is None:
+            return
+        try:
+            meta_id = self.drive.get_or_create_folder("_meta", self._root_folder_id)
+            found = self.drive.find_file_by_name_and_parent("manifest.json", meta_id)
+            if found is not None:
+                self.drive.update_file(found["id"], self.config.manifest_path)
+            else:
+                self.drive.upload_file(self.config.manifest_path, meta_id)
+            self.stats.manifest_snapshot_uploaded = True
+        except Exception as e:
+            self.stats.manifest_snapshot_error = str(e)
+            logger.warning("Manifest snapshot upload failed: %s", e)
+
+    def _maybe_download_manifest_snapshot(self) -> None:
+        """Restore a fresh device's manifest from the Drive snapshot."""
+        if self.drive is None or self.full or os.path.exists(self.config.manifest_path):
+            return
+        try:
+            meta_id = self.drive.get_or_create_folder("_meta", self._root_folder_id)
+            found = self.drive.find_file_by_name_and_parent("manifest.json", meta_id)
+            if found is None:
+                return
+            manifest_path = os.path.expanduser(self.config.manifest_path)
+            os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+            tmp_path = manifest_path + ".snapshot.tmp"
+            try:
+                self.drive.download_file(found["id"], tmp_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+            os.replace(tmp_path, manifest_path)
+            self.manifest = Manifest.load(manifest_path)
+            self.stats.manifest_snapshot_downloaded = True
+            logger.info(
+                "Downloaded manifest snapshot: %d entries",
+                len(self.manifest.entries),
+            )
+        except Exception as e:
+            logger.warning("Manifest snapshot download failed: %s", e)
 
     def _process_file(
         self,
@@ -355,13 +408,16 @@ class BackupEngine:
         """Return whether a manifest key still points to a local file."""
         return os.path.isfile(self._local_path_for_manifest_key(relative_path))
 
-    def _stale_manifest_entries(self) -> list[tuple[str, ManifestEntry]]:
+    def _stale_manifest_entries(
+        self, include_pruned: bool = True
+    ) -> list[tuple[str, ManifestEntry]]:
         """Return manifest entries whose local files no longer exist."""
         return [
             (rel_path, entry)
             for rel_path, entry in sorted(self.manifest.entries.items())
             if rel_path not in self._prune_protected_paths
             and not self._manifest_key_exists_locally(rel_path)
+            and (include_pruned or not entry.pruned)
         ]
 
     def _record_pruned_file(self, relative_path: str, entry: ManifestEntry) -> None:
@@ -378,8 +434,11 @@ class BackupEngine:
         )
 
     def _prune_stale_manifest_entries(self) -> None:
-        """Move stale Drive files to trash and remove successful manifest entries."""
-        for relative_path, entry in self._stale_manifest_entries():
+        """Mark stale Drive files as pruned, or trash them in trash mode."""
+        include_pruned = self.prune_mode == "trash"
+        for relative_path, entry in self._stale_manifest_entries(
+            include_pruned=include_pruned
+        ):
             if not entry.drive_file_id:
                 self.stats.files_prune_failed += 1
                 self.stats.prune_error_files.append(
@@ -392,6 +451,16 @@ class BackupEngine:
                 continue
 
             if self.dry_run:
+                self._record_pruned_file(relative_path, entry)
+                continue
+
+            if self.prune_mode == "flag":
+                entry.pruned = True
+                try:
+                    self._save_manifest_progress()
+                except ManifestProgressError:
+                    entry.pruned = False
+                    raise
                 self._record_pruned_file(relative_path, entry)
                 continue
 
@@ -442,6 +511,7 @@ class BackupEngine:
                 "content_changed",
                 "size_changed",
                 "md5_error",
+                "restored",
             )
         ):
             result = self.drive.update_file(

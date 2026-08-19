@@ -158,6 +158,81 @@ class TestManifest:
         assert manifest.get("old/file.txt") is None
         assert manifest.remove("missing.txt") is None
 
+    def test_set_pruned_flag_and_save_roundtrip(self, tmp_path: Path) -> None:
+        """pruned entries survive a save/load roundtrip with the flag intact."""
+        path = tmp_path / "manifest.json"
+        manifest = Manifest()
+        manifest.set(
+            relative_path="test/file.txt",
+            md5="abc123",
+            size=100,
+            mtime=1000.0,
+            drive_file_id="drive_123",
+            drive_parent_id="parent_456",
+            pruned=True,
+        )
+        manifest.save(str(path))
+
+        loaded = Manifest.load(str(path))
+        entry = loaded.get("test/file.txt")
+        assert entry is not None
+        assert entry.pruned is True
+
+    def test_old_manifest_without_pruned_key_loads_unpruned(
+        self, tmp_path: Path
+    ) -> None:
+        """Manifests written before the pruned field load with pruned=False."""
+        path = tmp_path / "manifest.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "files": {
+                        "test.txt": {
+                            "md5": "abc",
+                            "size": 10,
+                            "mtime": 1.0,
+                            "drive_file_id": "id",
+                            "drive_parent_id": "pid",
+                            "last_uploaded": "2024-01-01T00:00:00+00:00",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = Manifest.load(str(path))
+
+        entry = loaded.get("test.txt")
+        assert entry is not None
+        assert entry.pruned is False
+
+    def test_set_without_pruned_clears_stale_flag(self) -> None:
+        """Re-uploading a file (set without pruned) clears a prior prune flag."""
+        manifest = Manifest()
+        manifest.set(
+            relative_path="file.txt",
+            md5="abc",
+            size=10,
+            mtime=1.0,
+            drive_file_id="id",
+            drive_parent_id="pid",
+            pruned=True,
+        )
+        manifest.set(
+            relative_path="file.txt",
+            md5="def",
+            size=20,
+            mtime=2.0,
+            drive_file_id="id2",
+            drive_parent_id="pid",
+        )
+
+        entry = manifest.get("file.txt")
+        assert entry is not None
+        assert entry.pruned is False
+
 
 class TestNeedsUpload:
     def _make_file_entry(self, **kwargs: Any) -> FileEntry:
@@ -176,6 +251,23 @@ class TestNeedsUpload:
         result, reason = needs_upload(file, manifest)
         assert result is True
         assert reason == "new"
+
+    def test_pruned_entry_needs_upload_restored(self) -> None:
+        """A pruned entry always re-uploads, even with matching mtime/size."""
+        manifest = Manifest()
+        manifest.set(
+            relative_path="file.txt",
+            md5="abc",
+            size=100,
+            mtime=1000.0,
+            drive_file_id="id",
+            drive_parent_id="pid",
+            pruned=True,
+        )
+        file = self._make_file_entry(size=100, mtime=1000.0)
+        result, reason = needs_upload(file, manifest)
+        assert result is True
+        assert reason == "restored"
 
     def test_unchanged_file_skipped(self) -> None:
         manifest = Manifest()
@@ -302,6 +394,57 @@ class TestManifestCorrupted:
         )
 
         with pytest.raises(ManifestLoadError, match=re.escape(str(path))):
+            Manifest.load(str(path))
+
+    def test_load_rejects_unknown_entry_keys(self, tmp_path: Path) -> None:
+        """Entries with unknown extra keys are still rejected."""
+        path = tmp_path / "manifest.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "files": {
+                        "test.txt": {
+                            "md5": "abc",
+                            "size": 10,
+                            "mtime": 1.0,
+                            "drive_file_id": "id",
+                            "drive_parent_id": "pid",
+                            "last_uploaded": "2024-01-01T00:00:00+00:00",
+                            "mystery": "x",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ManifestLoadError, match="unknown keys"):
+            Manifest.load(str(path))
+
+    def test_load_rejects_non_boolean_pruned(self, tmp_path: Path) -> None:
+        path = tmp_path / "manifest.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "files": {
+                        "test.txt": {
+                            "md5": "abc",
+                            "size": 10,
+                            "mtime": 1.0,
+                            "drive_file_id": "id",
+                            "drive_parent_id": "pid",
+                            "last_uploaded": "2024-01-01T00:00:00+00:00",
+                            "pruned": "yes",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ManifestLoadError, match="pruned"):
             Manifest.load(str(path))
 
     def test_load_rejects_unsupported_version(self, tmp_path: Path) -> None:

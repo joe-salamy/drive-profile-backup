@@ -30,6 +30,7 @@ class ManifestEntry:
     drive_file_id: str
     drive_parent_id: str
     last_uploaded: str  # ISO timestamp
+    pruned: bool = False
 
 
 class ManifestLoadError(RuntimeError):
@@ -63,11 +64,21 @@ def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
             raise ValueError("manifest file paths must be strings")
         if not isinstance(entry_data, Mapping):
             raise ValueError(f"entry {relative_path!r} must be a mapping")
-        if set(entry_data) != _MANIFEST_ENTRY_FIELDS:
+        unknown = set(entry_data) - (_MANIFEST_ENTRY_FIELDS | {"pruned"})
+        if unknown:
             raise ValueError(
-                f"entry {relative_path!r} must contain exactly "
-                f"{', '.join(sorted(_MANIFEST_ENTRY_FIELDS))}"
+                f"entry {relative_path!r} contains unknown keys: "
+                f"{', '.join(sorted(unknown))}"
             )
+        missing = _MANIFEST_ENTRY_FIELDS - set(entry_data)
+        if missing:
+            raise ValueError(
+                f"entry {relative_path!r} is missing required keys: "
+                f"{', '.join(sorted(missing))}"
+            )
+        pruned = entry_data.get("pruned", False)
+        if type(pruned) is not bool:
+            raise ValueError(f"entry {relative_path!r} pruned must be a boolean")
         if not all(
             isinstance(entry_data[field_name], str)
             for field_name in _MANIFEST_ENTRY_STRING_FIELDS
@@ -92,6 +103,7 @@ def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
             drive_file_id=entry_data["drive_file_id"],
             drive_parent_id=entry_data["drive_parent_id"],
             last_uploaded=entry_data["last_uploaded"],
+            pruned=pruned,
         )
     return entries
 
@@ -151,6 +163,8 @@ class Manifest:
         mtime: float,
         drive_file_id: str,
         drive_parent_id: str,
+        *,
+        pruned: bool = False,
     ) -> None:
         """Record an uploaded file in the manifest."""
         self.entries[relative_path] = ManifestEntry(
@@ -160,6 +174,7 @@ class Manifest:
             drive_file_id=drive_file_id,
             drive_parent_id=drive_parent_id,
             last_uploaded=datetime.now(timezone.utc).isoformat(),
+            pruned=pruned,
         )
 
 
@@ -183,14 +198,18 @@ def needs_upload(file: FileEntry, manifest: Manifest) -> tuple[bool, str]:
     """Determine if a file needs uploading using two-tier dedup.
 
     Returns (needs_upload: bool, reason: str).
-    Reasons: "new", "size_changed", "content_changed", "skipped_mtime_match",
-             "skipped_md5_match", "md5_error".
+    Reasons: "new", "restored", "size_changed", "content_changed",
+             "skipped_mtime_match", "skipped_md5_match", "md5_error".
     """
     entry = manifest.get(file.relative_path)
 
     # New file — not in manifest
     if entry is None:
         return True, "new"
+
+    # Previously pruned entry — local file re-created, must re-upload
+    if entry.pruned:
+        return True, "restored"
 
     # Fast path: mtime and size unchanged → file has not been modified
     if file.mtime == entry.mtime and file.size == entry.size:

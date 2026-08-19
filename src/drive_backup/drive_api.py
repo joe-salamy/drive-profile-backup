@@ -209,6 +209,19 @@ class DriveAPI:
         """Move a Drive file to trash. Returns updated file metadata."""
         return self._execute_with_retry(lambda: self._do_trash_file(file_id))
 
+    def download_file(self, file_id: str, local_path: str) -> None:
+        """Download a Drive file's media content to a local path."""
+        from googleapiclient.http import MediaIoBaseDownload
+
+        request = self.service.files().get(fileId=file_id, alt="media")
+        with open(local_path, "wb") as f:
+            downloader = MediaIoBaseDownload(f, request, chunksize=1024 * 1024)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+                if status:
+                    logger.debug("Download progress: %.0f%%", status.progress() * 100)
+
     def _create_folder(self, metadata: dict[str, Any]) -> dict[str, Any]:
         self._rate_limiter.wait()
         result: dict[str, Any] = (

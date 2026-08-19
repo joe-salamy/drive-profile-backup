@@ -88,6 +88,7 @@ class TestGenerateReport:
         assert report["total_files_eligible"] == 90
         assert report["total_bytes_uploaded"] == 1024
         assert report["prune_enabled"] is True
+        assert report["prune_mode"] == "flag"
         assert report["files_pruned"] == 2
         assert report["files_prune_failed"] == 1
         assert report["total_bytes_pruned"] == 2048
@@ -95,6 +96,9 @@ class TestGenerateReport:
         assert report["prune_skipped_reason"] == ""
         assert report["pruned_files"] == []
         assert report["prune_error_files"] == []
+        assert report["manifest_snapshot_downloaded"] is False
+        assert report["manifest_snapshot_uploaded"] is False
+        assert report["manifest_snapshot_error"] == ""
         assert tuple(report) == (
             "backup_timestamp",
             "duration_seconds",
@@ -116,6 +120,7 @@ class TestGenerateReport:
             "drive_folder_id",
             "drive_folder_url",
             "prune_enabled",
+            "prune_mode",
             "files_pruned",
             "files_prune_failed",
             "total_bytes_pruned",
@@ -123,6 +128,9 @@ class TestGenerateReport:
             "prune_skipped_reason",
             "pruned_files",
             "prune_error_files",
+            "manifest_snapshot_downloaded",
+            "manifest_snapshot_uploaded",
+            "manifest_snapshot_error",
             "skipped_files",
             "uploaded_files",
             "extension_breakdown",
