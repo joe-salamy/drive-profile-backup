@@ -72,7 +72,11 @@ exclude_files:
   - "coverage.xml"
 
 # Path patterns to exclude (matched against relative path using wildcards)
-exclude_path_patterns: []
+exclude_path_patterns:
+  - "*/harness-info/*.html" # Generated OMP reports and overviews
+
+# Path patterns to include even when their parent directory is excluded
+include_path_patterns: []
 
 # Specific files to exclude (exact relative paths, forward slashes)
 exclude_specific_files: []

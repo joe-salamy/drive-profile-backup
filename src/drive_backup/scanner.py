@@ -39,6 +39,32 @@ class FileEntry:
         return human_size(self.size)
 
 
+def _is_included_path(rel_path: str, patterns: list[str]) -> bool:
+    """Check if a relative path matches any explicit include pattern."""
+    return any(fnmatch(rel_path, pattern) for pattern in patterns)
+
+
+def _has_included_descendant(rel_dir: str, patterns: list[str]) -> bool:
+    """Check if an included path may exist below a directory."""
+    prefix = f"{rel_dir.rstrip('/')}/"
+    return any(
+        fnmatch(rel_dir, pattern) or pattern.startswith(prefix) for pattern in patterns
+    )
+
+
+def _relative_path(path: str, root: str) -> str:
+    try:
+        return os.path.relpath(path, root).replace("\\", "/")
+    except ValueError:
+        return path.replace("\\", "/")
+
+
+def _is_excluded_dir_with_includes(name: str, rel_dir: str, config: Config) -> bool:
+    return _is_excluded_dir(name, config.exclude_dirs) and not _has_included_descendant(
+        rel_dir, config.include_path_patterns
+    )
+
+
 def _is_excluded_dir(name: str, exclude_dirs: list[str]) -> bool:
     """Check if a directory name matches any exclusion pattern."""
     for pattern in exclude_dirs:
@@ -89,8 +115,10 @@ def scan(config: Config) -> Iterator[FileEntry]:
                 logger.debug("Skipping symlink/junction: %s", full_dir)
                 continue
 
-            # Skip excluded directory names
-            if _is_excluded_dir(d, config.exclude_dirs):
+            # Skip excluded directory names unless an explicit include descends
+            # through the directory.
+            rel_dir = _relative_path(full_dir, root)
+            if _is_excluded_dir_with_includes(d, rel_dir, config):
                 excluded_dir_count += 1
                 logger.debug("Skipping excluded dir: %s", full_dir)
                 continue
@@ -142,8 +170,9 @@ def scan(config: Config) -> Iterator[FileEntry]:
                 )
                 continue
 
-            # Check path-based exclusion patterns (match against relative path)
-            if _is_excluded_by_path(rel_path, config.exclude_path_patterns):
+            if _is_excluded_by_path(
+                rel_path, config.exclude_path_patterns
+            ) and not _is_included_path(rel_path, config.include_path_patterns):
                 yield FileEntry(
                     path=full_path,
                     relative_path=rel_path,

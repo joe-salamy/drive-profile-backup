@@ -104,6 +104,7 @@ class TestLoadConfig:
                     "backup_root": "C:\\Test",
                     "max_file_size_mb": 100,
                     "exclude_dirs": ["custom_dir"],
+                    "include_path_patterns": ["path/*.jsonl"],
                 }
             ),
             encoding="utf-8",
@@ -114,6 +115,7 @@ class TestLoadConfig:
         assert config.backup_root == "C:\\Test"
         assert config.max_file_size_mb == 100.0
         assert config.exclude_dirs == ["custom_dir"]
+        assert config.include_path_patterns == ["path/*.jsonl"]
 
     def test_load_partial_yaml_keeps_other_defaults(self, tmp_path: Path) -> None:
         path = tmp_path / "config.yaml"

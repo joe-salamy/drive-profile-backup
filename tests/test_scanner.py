@@ -124,6 +124,84 @@ class TestScanner:
             ".dmypy.json",
         }
 
+    def test_default_harness_html_exports_are_skipped_but_json_is_kept(
+        self, tmp_path: Path
+    ) -> None:
+        tmp = str(tmp_path)
+        write_tree(
+            tmp_path,
+            {
+                "Code/z-archive/harness-info/index.html": "landing page",
+                "Code/z-archive/harness-info/llm-call-exports/history.html": "export",
+                "Code/z-archive/harness-info/llm-call-exports/source.jsonl": "source",
+                "Code/z-archive/harness-info/research-results/overview.html": "overview",
+                "Code/z-archive/harness-info/research-results/metadata.json": "metadata",
+                "_machine_state/scheduled_tasks.json": "machine state",
+            },
+        )
+        config = Config(profile_name="laptop-a", backup_root=tmp)
+
+        entries = list(scan(config))
+
+        kept_paths = {entry.relative_path for entry in entries if not entry.is_skipped}
+        skipped_by_path = {
+            entry.relative_path
+            for entry in entries
+            if entry.is_skipped and entry.skip_reason == "excluded_by_path_pattern"
+        }
+        assert kept_paths == {
+            "Code/z-archive/harness-info/llm-call-exports/source.jsonl",
+            "Code/z-archive/harness-info/research-results/metadata.json",
+            "_machine_state/scheduled_tasks.json",
+        }
+        assert skipped_by_path == {
+            "Code/z-archive/harness-info/index.html",
+            "Code/z-archive/harness-info/llm-call-exports/history.html",
+            "Code/z-archive/harness-info/research-results/overview.html",
+        }
+
+    def test_include_path_patterns_preserve_omp_jsonl_only(
+        self, tmp_path: Path
+    ) -> None:
+        tmp = str(tmp_path)
+        write_tree(
+            tmp_path,
+            {
+                ".omp/agent/sessions/-Code/session.jsonl": "source",
+                ".omp/agent/sessions/direct.jsonl": "direct source",
+                ".omp/agent/sessions/-Code/context.md": "derived context",
+                ".omp/agent/agent.db": "runtime state",
+                "_machine_state/network.json": "machine state",
+            },
+        )
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=tmp,
+            exclude_path_patterns=[".omp/*"],
+            include_path_patterns=[
+                ".omp/agent/sessions/*.jsonl",
+                ".omp/agent/sessions/**/*.jsonl",
+            ],
+        )
+
+        entries = list(scan(config))
+
+        kept_paths = {entry.relative_path for entry in entries if not entry.is_skipped}
+        skipped_by_path = {
+            entry.relative_path
+            for entry in entries
+            if entry.is_skipped and entry.skip_reason == "excluded_by_path_pattern"
+        }
+        assert kept_paths == {
+            ".omp/agent/sessions/-Code/session.jsonl",
+            ".omp/agent/sessions/direct.jsonl",
+            "_machine_state/network.json",
+        }
+        assert skipped_by_path == {
+            ".omp/agent/agent.db",
+            ".omp/agent/sessions/-Code/context.md",
+        }
+
     def test_excludes_file_patterns(self, tmp_path: Path) -> None:
         tmp = str(tmp_path)
         write_tree(

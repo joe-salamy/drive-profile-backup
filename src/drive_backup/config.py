@@ -101,7 +101,12 @@ class Config:
             "coverage.xml",
         ]
     )
-    exclude_path_patterns: list[str] = field(default_factory=list)
+    exclude_path_patterns: list[str] = field(
+        default_factory=lambda: [
+            "*/harness-info/*.html",
+        ]
+    )
+    include_path_patterns: list[str] = field(default_factory=list)
     exclude_specific_files: list[str] = field(default_factory=list)
     exclude_symlinks: bool = True
     max_file_size_mb: float = 500
@@ -231,6 +236,7 @@ _STRING_LIST_FIELDS = {
     "exclude_dirs",
     "exclude_files",
     "exclude_path_patterns",
+    "include_path_patterns",
     "exclude_specific_files",
     "no_size_limit",
     "machine_state_collectors",
