@@ -35,7 +35,12 @@ class TestRateLimiter:
 
     def test_rejects_invalid_rate(self) -> None:
         with pytest.raises(ValueError, match="writes_per_second"):
-            RateLimiter(writes_per_second=0)
+            RateLimiter(writes_per_second=-1)
+        with pytest.raises(ValueError, match="writes_per_second"):
+            RateLimiter(writes_per_second=float("inf"))
+        # 0 is valid (unlimited)
+        limiter = RateLimiter(writes_per_second=0)
+        assert limiter._interval == 0
 
 
 class TestDriveAPI:

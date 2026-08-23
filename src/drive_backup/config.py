@@ -144,8 +144,9 @@ class Config:
     credentials_path: str = "credentials.json"
     token_path: str = "~/.drive-backup/token.json"
     resumable_threshold_mb: float = 5
-    max_retries: int = 3
-    writes_per_second: float = 2.5
+    upload_workers: int = 8
+    max_retries: int = 8
+    writes_per_second: float = 0.0
     machine_state_collectors: list[str] = field(
         default_factory=lambda: list(MACHINE_STATE_COLLECTORS)
     )
@@ -165,10 +166,24 @@ class Config:
             raise ValueError("max_file_size_mb must be non-negative")
         if self.resumable_threshold_mb < 0:
             raise ValueError("resumable_threshold_mb must be non-negative")
+        if isinstance(self.upload_workers, bool) or not isinstance(
+            self.upload_workers, int
+        ):
+            raise ValueError("upload_workers must be an integer")
+        if self.upload_workers < 1:
+            raise ValueError("upload_workers must be at least 1")
+        if isinstance(self.max_retries, bool) or not isinstance(self.max_retries, int):
+            raise ValueError("max_retries must be an integer")
         if self.max_retries < 1:
             raise ValueError("max_retries must be at least 1")
-        if self.writes_per_second <= 0:
-            raise ValueError("writes_per_second must be greater than 0")
+        if isinstance(self.writes_per_second, bool) or not isinstance(
+            self.writes_per_second, (int, float)
+        ):
+            raise ValueError("writes_per_second must be a number")
+        if not math.isfinite(float(self.writes_per_second)):
+            raise ValueError("writes_per_second must be a finite number")
+        if self.writes_per_second < 0:
+            raise ValueError("writes_per_second must be non-negative")
         for extension, limit in self.size_limits_by_type.items():
             if limit < 0:
                 raise ValueError(f"size limit for {extension!r} must be non-negative")
@@ -246,11 +261,16 @@ _NUMBER_FIELDS = {
     "resumable_threshold_mb",
     "writes_per_second",
 }
+_INTEGER_FIELDS = {
+    "upload_workers",
+    "max_retries",
+}
 _CONFIG_FIELDS = (
     _STRING_FIELDS
     | _STRING_LIST_FIELDS
     | _NUMBER_FIELDS
-    | {"exclude_symlinks", "max_retries", "size_limits_by_type"}
+    | _INTEGER_FIELDS
+    | {"exclude_symlinks", "size_limits_by_type"}
 )
 
 
@@ -291,12 +311,17 @@ def _validate_config_values(data: Any) -> dict[str, Any]:
             if type(value) is not bool:
                 raise _invalid_value(field_name, "expected a boolean")
             values[field_name] = value
-        elif field_name == "max_retries":
+        elif field_name in _INTEGER_FIELDS:
             if isinstance(value, bool) or not isinstance(value, int):
                 raise _invalid_value(field_name, "expected an integer")
             values[field_name] = value
         elif field_name in _NUMBER_FIELDS:
-            values[field_name] = _finite_number(value, field_name)
+            num = _finite_number(value, field_name)
+            if field_name == "writes_per_second" and num < 0:
+                raise _invalid_value(
+                    field_name, "expected a non-negative finite number"
+                )
+            values[field_name] = num
         else:
             if not isinstance(value, dict) or not all(
                 isinstance(key, str) for key in value

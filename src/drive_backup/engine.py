@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -58,6 +59,23 @@ class ManifestProgressError(RuntimeError):
     """Raised when manifest progress cannot be saved durably."""
 
 
+MANIFEST_CHECKPOINT_INTERVAL_SECONDS = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class UploadWork:
+    file: FileEntry
+    reason: str
+    existing_drive_file_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class UploadResult:
+    md5: str
+    drive_file_id: str
+    drive_parent_id: str
+
+
 class BackupEngine:
     """Orchestrates the full backup flow."""
 
@@ -89,6 +107,8 @@ class BackupEngine:
         self.drive: DriveAPI | None = None  # Lazy: imported only when needed
         self._root_folder_id: str = ""
         self._prune_protected_paths: set[str] = set()
+        self._manifest_dirty: bool = False
+        self._last_manifest_checkpoint_at: float = time.monotonic()
 
     def run(
         self,
@@ -178,61 +198,369 @@ class BackupEngine:
             )
             self._maybe_download_manifest_snapshot()
 
+        # Init checkpoint tracking for this run
+        self._manifest_dirty = False
+        self._last_manifest_checkpoint_at = time.monotonic()
+
         # Scan and process files
-        for file_entry in scan(self.config):
-            self.stats.files_scanned += 1
-            self._process_file(file_entry, progress_callback)
+        if self.dry_run:
+            for file_entry in scan(self.config):
+                self.stats.files_scanned += 1
+                # _prepare_upload handles skips/dedup/dry-run accounting
+                self._prepare_upload(file_entry, progress_callback)
+            # prune handling for dry-run (serial, no checkpoint)
+            if self.prune:
+                if self.full:
+                    self.stats.prune_skipped_reason = (
+                        "Skipped prune because --full ignores the manifest"
+                    )
+                elif not backup_root_available:
+                    self.stats.prune_skipped_reason = (
+                        "Skipped prune because backup root is unavailable"
+                    )
+                elif not self.dry_run and self.stats.files_skipped_error > 0:
+                    self.stats.prune_skipped_reason = (
+                        "Skipped prune because backup had file or upload errors"
+                    )
+                else:
+                    self._prune_stale_manifest_entries()
+            self.stats.end_time = time.time()
+            # Dry-run never saves manifest or uploads snapshot/report
+            report = generate_report(self.stats)
+            report_dir = os.path.join(
+                os.path.dirname(os.path.expanduser(self.config.manifest_path)),
+                "reports",
+            )
+            os.makedirs(report_dir, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+            prefix = "dry-run-" if self.dry_run else ""
+            report_path = os.path.join(report_dir, f"{prefix}backup-{timestamp}.json")
+            save_report(report, report_path)
+            logger.info("Report saved to %s", report_path)
+            return report
 
-        if self.prune:
-            if self.full:
-                self.stats.prune_skipped_reason = (
-                    "Skipped prune because --full ignores the manifest"
-                )
-            elif not backup_root_available:
-                self.stats.prune_skipped_reason = (
-                    "Skipped prune because backup root is unavailable"
-                )
-            elif not self.dry_run and self.stats.files_skipped_error > 0:
-                self.stats.prune_skipped_reason = (
-                    "Skipped prune because backup had file or upload errors"
-                )
-            else:
-                self._prune_stale_manifest_entries()
-
-        self.stats.end_time = time.time()
-
-        # Save manifest
-        if not self.dry_run:
-            self.manifest.save(self.config.manifest_path)
-            self._upload_manifest_snapshot()
-
-        # Generate report
-        report = generate_report(self.stats)
-
-        # Save report locally
-        report_dir = os.path.join(
-            os.path.dirname(os.path.expanduser(self.config.manifest_path)),
-            "reports",
-        )
-        os.makedirs(report_dir, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-        prefix = "dry-run-" if self.dry_run else ""
-        report_path = os.path.join(report_dir, f"{prefix}backup-{timestamp}.json")
-        save_report(report, report_path)
-        logger.info("Report saved to %s", report_path)
-
-        # Upload report to Drive
-        if not self.dry_run and self.drive:
+        # Non-dry-run: concurrent pipeline
+        futures: dict[Future[UploadResult], UploadWork] = {}
+        executor: ThreadPoolExecutor | None = None
+        final_checkpoint_failed = False
+        try:
+            executor = ThreadPoolExecutor(max_workers=self.config.upload_workers)
+            # Wrap scan/upload loop to handle KeyboardInterrupt and checkpoint errors
             try:
-                reports_folder_id = self.drive.get_or_create_folder(
-                    "_reports", self._root_folder_id
-                )
-                self.drive.upload_file(report_path, reports_folder_id)
-                logger.info("Report uploaded to Drive/_reports/")
-            except Exception as e:
-                logger.warning("Report upload failed: %s", e)
+                for file_entry in scan(self.config):
+                    self.stats.files_scanned += 1
+                    # Prepare upload work (handles skips/dedup)
+                    try:
+                        work = self._prepare_upload(file_entry, progress_callback)
+                    except ManifestProgressError:
+                        raise
+                    if work is None:
+                        # Check periodic checkpoint after skip/dedup
+                        try:
+                            self._maybe_save_manifest_progress()
+                        except ManifestProgressError:
+                            # Fatal: cancel pending, wait for running, propagate
+                            for f in list(futures.keys()):
+                                f.cancel()
+                            if futures:
+                                wait(list(futures.keys()))
+                            raise
+                        continue
 
-        return report
+                    # Submit to worker pool
+                    future = executor.submit(self._execute_upload, work)
+                    futures[future] = work
+
+                    # Non-blockingly drain completed futures after each submission
+                    done_now = [f for f in list(futures.keys()) if f.done()]
+                    for fut in done_now:
+                        w = futures.pop(fut)
+                        try:
+                            result = fut.result()
+                        except Exception as exc:
+                            self._record_upload_error(w, exc, progress_callback)
+                        else:
+                            try:
+                                self._complete_upload(w, result, progress_callback)
+                            except ManifestProgressError:
+                                for ff in list(futures.keys()):
+                                    ff.cancel()
+                                if futures:
+                                    wait(list(futures.keys()))
+                                raise
+                    try:
+                        self._maybe_save_manifest_progress()
+                    except ManifestProgressError:
+                        for f in list(futures.keys()):
+                            f.cancel()
+                        if futures:
+                            wait(list(futures.keys()))
+                        raise
+
+                    # Enforce bound: at most 2*workers in-flight
+                    while len(futures) >= 2 * self.config.upload_workers:
+                        # Use remaining checkpoint interval as timeout
+                        now = time.monotonic()
+                        elapsed = now - self._last_manifest_checkpoint_at
+                        remaining = MANIFEST_CHECKPOINT_INTERVAL_SECONDS - elapsed
+                        timeout: float | None = None
+                        if self._manifest_dirty:
+                            timeout = max(0.0, remaining)
+                        # Wait for at least one completion
+                        if timeout is not None:
+                            done_set, _ = wait(
+                                list(futures.keys()),
+                                timeout=timeout,
+                                return_when=FIRST_COMPLETED,
+                            )
+                            if not done_set:
+                                # Timeout -> flush checkpoint
+                                try:
+                                    self._maybe_save_manifest_progress()
+                                except ManifestProgressError:
+                                    for f in list(futures.keys()):
+                                        f.cancel()
+                                    if futures:
+                                        wait(list(futures.keys()))
+                                    raise
+                                continue
+                        else:
+                            done_set, _ = wait(
+                                list(futures.keys()), return_when=FIRST_COMPLETED
+                            )
+                        for fut in done_set:
+                            w = futures.pop(fut)
+                            try:
+                                result = fut.result()
+                            except Exception as exc:
+                                self._record_upload_error(w, exc, progress_callback)
+                            else:
+                                try:
+                                    self._complete_upload(w, result, progress_callback)
+                                except ManifestProgressError:
+                                    for ff in list(futures.keys()):
+                                        ff.cancel()
+                                    if futures:
+                                        wait(list(futures.keys()))
+                                    raise
+                        try:
+                            self._maybe_save_manifest_progress()
+                        except ManifestProgressError:
+                            for f in list(futures.keys()):
+                                f.cancel()
+                            if futures:
+                                wait(list(futures.keys()))
+                            raise
+
+                # Scan finished: drain remaining futures with checkpoint timeout
+                while futures:
+                    now = time.monotonic()
+                    elapsed = now - self._last_manifest_checkpoint_at
+                    remaining = MANIFEST_CHECKPOINT_INTERVAL_SECONDS - elapsed
+                    timeout = None
+                    if self._manifest_dirty:
+                        timeout = max(0.0, remaining)
+                    if timeout is not None:
+                        done_set, _ = wait(
+                            list(futures.keys()),
+                            timeout=timeout,
+                            return_when=FIRST_COMPLETED,
+                        )
+                        if not done_set:
+                            try:
+                                self._maybe_save_manifest_progress()
+                            except ManifestProgressError:
+                                for f in list(futures.keys()):
+                                    f.cancel()
+                                if futures:
+                                    wait(list(futures.keys()))
+                                raise
+                            continue
+                    else:
+                        done_set, _ = wait(
+                            list(futures.keys()), return_when=FIRST_COMPLETED
+                        )
+                    for fut in done_set:
+                        w = futures.pop(fut)
+                        try:
+                            result = fut.result()
+                        except Exception as exc:
+                            self._record_upload_error(w, exc, progress_callback)
+                        else:
+                            try:
+                                self._complete_upload(w, result, progress_callback)
+                            except ManifestProgressError:
+                                for ff in list(futures.keys()):
+                                    ff.cancel()
+                                if futures:
+                                    wait(list(futures.keys()))
+                                raise
+                    try:
+                        self._maybe_save_manifest_progress()
+                    except ManifestProgressError:
+                        for f in list(futures.keys()):
+                            f.cancel()
+                        if futures:
+                            wait(list(futures.keys()))
+                        raise
+
+            except KeyboardInterrupt:
+                # Controlled interruption: flush dirty state, then propagate
+                # Cancel futures that have not started, wait for running
+                for f in list(futures.keys()):
+                    f.cancel()
+                if futures:
+                    # Wait for running to finish (they may still complete remote)
+                    wait(list(futures.keys()))
+                    # Drain any completed that we can apply? But after interrupt we should flush what we have.
+                    # Apply any that completed successfully before interrupt? We have already drained? For remaining, try to apply those that finished.
+                    for fut, w in list(futures.items()):
+                        if fut.done() and not fut.cancelled():
+                            try:
+                                result = fut.result()
+                            except Exception as exc:
+                                self._record_upload_error(w, exc, progress_callback)
+                            else:
+                                try:
+                                    self._complete_upload(w, result, progress_callback)
+                                except ManifestProgressError:
+                                    # If flush fails during interrupt handling, we will handle in finally
+                                    pass
+                            futures.pop(fut, None)
+                # Force final checkpoint before propagating
+                try:
+                    self._maybe_save_manifest_progress(force=True)
+                    # If file doesn't exist but no dirty, ensure file exists
+                    if not os.path.exists(self.config.manifest_path):
+                        self._save_manifest_progress()
+                except ManifestProgressError:
+                    final_checkpoint_failed = True
+                raise
+            except ManifestProgressError:
+                final_checkpoint_failed = True
+                raise
+            finally:
+                # On normal exit, also ensure we attempt to flush if not already failed
+                # This covers the case where KeyboardInterrupt didn't happen but we are exiting normally
+                # But we also handle normal final checkpoint after prune outside this block
+                # Here we just ensure executor shutdown handling later
+                pass
+
+            # Prune phase: only after every upload future settles
+            if self.prune:
+                if self.full:
+                    self.stats.prune_skipped_reason = (
+                        "Skipped prune because --full ignores the manifest"
+                    )
+                elif not backup_root_available:
+                    self.stats.prune_skipped_reason = (
+                        "Skipped prune because backup root is unavailable"
+                    )
+                elif self.stats.files_skipped_error > 0:
+                    self.stats.prune_skipped_reason = (
+                        "Skipped prune because backup had file or upload errors"
+                    )
+                else:
+                    try:
+                        self._prune_stale_manifest_entries()
+                    except ManifestProgressError:
+                        final_checkpoint_failed = True
+                        raise
+
+            self.stats.end_time = time.time()
+
+            # Final local checkpoint before snapshot
+            if not final_checkpoint_failed:
+                try:
+                    # Force flush dirty; also create file if missing even when not dirty
+                    if self._manifest_dirty:
+                        self._maybe_save_manifest_progress(force=True)
+                    elif not os.path.exists(self.config.manifest_path):
+                        self._save_manifest_progress()
+                    else:
+                        # Still ensure checkpoint interval flush? Force to clean state
+                        self._maybe_save_manifest_progress(force=True)
+                except ManifestProgressError:
+                    final_checkpoint_failed = True
+                    raise
+
+            # Save manifest already handled by checkpoint; but ensure stats end_time already set
+            # Upload manifest snapshot (skip if final checkpoint failed)
+            if not final_checkpoint_failed:
+                self._upload_manifest_snapshot()
+
+            # Generate report
+            report = generate_report(self.stats)
+
+            # Save report locally
+            report_dir = os.path.join(
+                os.path.dirname(os.path.expanduser(self.config.manifest_path)),
+                "reports",
+            )
+            os.makedirs(report_dir, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+            prefix = "dry-run-" if self.dry_run else ""
+            report_path = os.path.join(report_dir, f"{prefix}backup-{timestamp}.json")
+            save_report(report, report_path)
+            logger.info("Report saved to %s", report_path)
+
+            # Upload report to Drive (skip if final checkpoint failed)
+            if not final_checkpoint_failed and self.drive:
+                try:
+                    reports_folder_id = self.drive.get_or_create_folder(
+                        "_reports", self._root_folder_id
+                    )
+                    self.drive.upload_file(report_path, reports_folder_id)
+                    logger.info("Report uploaded to Drive/_reports/")
+                except Exception as e:
+                    logger.warning("Report upload failed: %s", e)
+
+            return report
+
+        except ManifestProgressError:
+            # Propagate after ensuring we don't upload snapshot/report
+            # Still need to generate report locally? Plan says do not upload manifest/report after failed final checkpoint.
+            # But we should still save local report and set end_time, then re-raise?
+            # For now, ensure end_time set, generate report, save locally, but skip Drive uploads, then raise.
+            # However plan says "Do not upload the Drive manifest snapshot or report after a failed final checkpoint."
+            # It doesn't say to skip local report saving. We'll still save local report before raising.
+            if not hasattr(self.stats, "end_time") or self.stats.end_time == 0:
+                self.stats.end_time = time.time()
+            else:
+                if self.stats.end_time == 0:
+                    self.stats.end_time = time.time()
+            # Attempt to save local report even after checkpoint failure? Keep consistent with earlier handling.
+            try:
+                report = generate_report(self.stats)
+                report_dir = os.path.join(
+                    os.path.dirname(os.path.expanduser(self.config.manifest_path)),
+                    "reports",
+                )
+                os.makedirs(report_dir, exist_ok=True)
+                timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+                prefix = "dry-run-" if self.dry_run else ""
+                report_path = os.path.join(
+                    report_dir, f"{prefix}backup-{timestamp}.json"
+                )
+                save_report(report, report_path)
+                logger.info("Report saved to %s", report_path)
+            except Exception:
+                pass
+            raise
+        except KeyboardInterrupt:
+            # Ensure end_time and local report? For interrupt, we flushed, but should propagate KeyboardInterrupt
+            if self.stats.end_time == 0:
+                self.stats.end_time = time.time()
+            raise
+        finally:
+            if executor is not None:
+                try:
+                    executor.shutdown(wait=True, cancel_futures=True)
+                except TypeError:
+                    executor.shutdown(wait=True)
+                # If we are in normal path and haven't yet handled final checkpoint failure, the finally here already handled?
+                # The outer try's final checkpoint is inside the try, so this finally just cleans executor.
+                pass
 
     def _resolve_backup_folder(self) -> str:
         """Return the Drive folder ID used as the backup root."""
@@ -250,6 +578,18 @@ class BackupEngine:
             self.manifest.save(self.config.manifest_path)
         except Exception as e:
             raise ManifestProgressError("Could not save manifest progress") from e
+
+    def _maybe_save_manifest_progress(self, *, force: bool = False) -> None:
+        """Checkpoint manifest every 30s or when forced."""
+        if not self._manifest_dirty:
+            return
+        now = time.monotonic()
+        elapsed = now - self._last_manifest_checkpoint_at
+        if not force and elapsed < MANIFEST_CHECKPOINT_INTERVAL_SECONDS:
+            return
+        self._save_manifest_progress()
+        self._manifest_dirty = False
+        self._last_manifest_checkpoint_at = now
 
     def _upload_manifest_snapshot(self) -> None:
         """Upload the local manifest as a snapshot to Drive/_meta/manifest.json."""
@@ -297,12 +637,12 @@ class BackupEngine:
         except Exception as e:
             logger.warning("Manifest snapshot download failed: %s", e)
 
-    def _process_file(
+    def _prepare_upload(
         self,
         file: FileEntry,
         progress_callback: Callable[[FileEntry, ProgressEvent], None] | None = None,
-    ) -> None:
-        """Process a single file: check exclusions, dedup, upload."""
+    ) -> UploadWork | None:
+        """Handle skips/dedup/dry-run and return work for uploads that need Drive I/O."""
         # Skipped by scanner (exclusion or error)
         if file.is_skipped:
             if "error" in file.skip_reason:
@@ -329,7 +669,7 @@ class BackupEngine:
                 )
             if progress_callback:
                 progress_callback(file, ProgressEvent(ProgressKind.SKIPPED))
-            return
+            return None
 
         # Eligible file — track total
         self.stats.bytes_total_eligible += file.size
@@ -340,7 +680,7 @@ class BackupEngine:
             self.stats.files_skipped_dedup += 1
             if progress_callback:
                 progress_callback(file, ProgressEvent(ProgressKind.DEDUP, reason))
-            return
+            return None
 
         # Upload (or simulate in dry-run)
         if self.dry_run:
@@ -351,29 +691,173 @@ class BackupEngine:
                 progress_callback(
                     file, ProgressEvent(ProgressKind.WOULD_UPLOAD, reason)
                 )
-            return
+            return None
 
+        # Snapshot existing Drive ID for direct-update path
+        existing = self.manifest.get(file.relative_path)
+        existing_drive_file_id: str | None = None
+        if (
+            existing
+            and existing.drive_file_id
+            and reason
+            in (
+                "content_changed",
+                "size_changed",
+                "md5_error",
+                "restored",
+            )
+        ):
+            existing_drive_file_id = existing.drive_file_id
+
+        return UploadWork(
+            file=file, reason=reason, existing_drive_file_id=existing_drive_file_id
+        )
+
+    def _execute_upload(self, work: UploadWork) -> UploadResult:
+        """Perform folder resolution and Drive I/O for a single file."""
+        assert self.drive is not None
+        file = work.file
+
+        # Determine the parent folder on Drive
+        rel_dir = os.path.dirname(file.relative_path)
+        if rel_dir:
+            path_parts = rel_dir.split("/")
+            parent_id = self.drive.ensure_folder_path(path_parts, self._root_folder_id)
+        else:
+            parent_id = self._root_folder_id
+
+        resumable = file.size > self.config.resumable_threshold_bytes
+
+        # Update existing file, reconcile an orphaned same-name file, or upload new one
+        if work.existing_drive_file_id:
+            result = self.drive.update_file(
+                work.existing_drive_file_id, file.path, resumable=resumable
+            )
+        else:
+            filename = os.path.basename(file.path)
+            found = self.drive.find_file_by_name_and_parent(filename, parent_id)
+            if found is not None:
+                result = self.drive.update_file(
+                    found["id"], file.path, resumable=resumable
+                )
+            else:
+                result = self.drive.upload_file(
+                    file.path, parent_id, resumable=resumable
+                )
+
+        md5 = result.get("md5Checksum", "")
+        drive_file_id = str(result.get("id", ""))
+        return UploadResult(
+            md5=md5, drive_file_id=drive_file_id, drive_parent_id=parent_id
+        )
+
+    def _complete_upload(
+        self,
+        work: UploadWork,
+        result: UploadResult,
+        progress_callback: Callable[[FileEntry, ProgressEvent], None] | None = None,
+    ) -> None:
+        """Apply Drive result to manifest/stats/progress on the main thread."""
+        file = work.file
+        md5 = result.md5
+        if not md5:
+            md5 = compute_md5(file.path) or ""
+
+        self.manifest.set(
+            relative_path=file.relative_path,
+            md5=md5,
+            size=file.size,
+            mtime=file.mtime,
+            drive_file_id=result.drive_file_id,
+            drive_parent_id=result.drive_parent_id,
+        )
+        self._manifest_dirty = True
+        self.stats.files_uploaded += 1
+        self.stats.bytes_uploaded += file.size
+        self._record_upload(file)
+        if progress_callback:
+            progress_callback(file, ProgressEvent(ProgressKind.UPLOADED, work.reason))
+        # Checkpoint may raise ManifestProgressError
+        # Caller decides when to flush; we don't auto-flush here to allow batching,
+        # but the outer loop will call _maybe_save after each completion.
+        # However to keep the contract that _complete marks dirty, we leave flush to caller.
+
+    def _record_upload_error(
+        self,
+        work: UploadWork,
+        error: Exception,
+        progress_callback: Callable[[FileEntry, ProgressEvent], None] | None = None,
+    ) -> None:
+        """Record a per-file upload failure."""
+        if isinstance(error, ManifestProgressError):
+            raise error
+        logger.error("Failed to upload %s: %s", work.file.path, error)
+        self.stats.files_skipped_error += 1
+        self.stats.error_files.append(
+            ErrorFile(
+                path=work.file.path,
+                relative_path=work.file.relative_path,
+                error=str(error),
+            )
+        )
+        if progress_callback:
+            progress_callback(work.file, ProgressEvent(ProgressKind.ERROR))
+
+    # Compatibility shim for old tests that call _process_file directly.
+    # Preserves immediate persistence semantics for single-file tests.
+    def _process_file(
+        self,
+        file: FileEntry,
+        progress_callback: Callable[[FileEntry, ProgressEvent], None] | None = None,
+    ) -> None:
+        """Process a single file: check exclusions, dedup, upload. Legacy shim."""
+        work = self._prepare_upload(file, progress_callback)
+        if work is None:
+            return
+        # For legacy direct calls, we are not in concurrent mode; perform upload synchronously
+        # and immediately checkpoint.
         try:
-            self._upload_file(file, reason)
-            self.stats.files_uploaded += 1
-            self.stats.bytes_uploaded += file.size
-            self._record_upload(file)
-            if progress_callback:
-                progress_callback(file, ProgressEvent(ProgressKind.UPLOADED, reason))
+            result = self._execute_upload(work)
         except ManifestProgressError:
             raise
-        except Exception as e:
-            logger.error("Failed to upload %s: %s", file.path, e)
-            self.stats.files_skipped_error += 1
-            self.stats.error_files.append(
-                ErrorFile(
-                    path=file.path,
-                    relative_path=file.relative_path,
-                    error=str(e),
-                )
-            )
-            if progress_callback:
-                progress_callback(file, ProgressEvent(ProgressKind.ERROR))
+        except Exception as exc:
+            self._record_upload_error(work, exc, progress_callback)
+            return
+        try:
+            self._complete_upload(work, result, progress_callback)
+            # Immediate persistence for legacy path
+            self._manifest_dirty = True
+            self._save_manifest_progress()
+            self._manifest_dirty = False
+            self._last_manifest_checkpoint_at = time.monotonic()
+        except ManifestProgressError:
+            raise
+        except Exception as exc:
+            self._record_upload_error(work, exc, progress_callback)
+
+    def _upload_file(self, file: FileEntry, reason: str) -> None:
+        """Legacy manifest-mutating upload path. Retained for compatibility."""
+        # Reconstruct work and execute synchronously
+        existing = self.manifest.get(file.relative_path)
+        existing_id = None
+        if (
+            existing
+            and existing.drive_file_id
+            and reason in ("content_changed", "size_changed", "md5_error", "restored")
+        ):
+            existing_id = existing.drive_file_id
+        work = UploadWork(file=file, reason=reason, existing_drive_file_id=existing_id)
+        result = self._execute_upload(work)
+        md5 = result.md5 or compute_md5(file.path) or ""
+        self.manifest.set(
+            relative_path=file.relative_path,
+            md5=md5,
+            size=file.size,
+            mtime=file.mtime,
+            drive_file_id=result.drive_file_id,
+            drive_parent_id=result.drive_parent_id,
+        )
+        self._save_manifest_progress()
 
     def _record_upload(self, file: FileEntry) -> None:
         """Track an uploaded (or would-be-uploaded) file for reporting."""
@@ -456,11 +940,7 @@ class BackupEngine:
 
             if self.prune_mode == "flag":
                 entry.pruned = True
-                try:
-                    self._save_manifest_progress()
-                except ManifestProgressError:
-                    entry.pruned = False
-                    raise
+                self._manifest_dirty = True
                 self._record_pruned_file(relative_path, entry)
                 continue
 
@@ -486,63 +966,6 @@ class BackupEngine:
                         error=str(e),
                     )
                 )
-
-    def _upload_file(self, file: FileEntry, reason: str) -> None:
-        """Upload a single file to Drive and update the manifest."""
-        assert self.drive is not None
-
-        # Determine the parent folder on Drive
-        rel_dir = os.path.dirname(file.relative_path)
-        if rel_dir:
-            path_parts = rel_dir.split("/")
-            parent_id = self.drive.ensure_folder_path(path_parts, self._root_folder_id)
-        else:
-            parent_id = self._root_folder_id
-
-        resumable = file.size > self.config.resumable_threshold_bytes
-
-        # Update existing file, reconcile an orphaned same-name file, or upload new one
-        existing = self.manifest.get(file.relative_path)
-        if (
-            existing
-            and existing.drive_file_id
-            and reason
-            in (
-                "content_changed",
-                "size_changed",
-                "md5_error",
-                "restored",
-            )
-        ):
-            result = self.drive.update_file(
-                existing.drive_file_id, file.path, resumable=resumable
-            )
-        else:
-            filename = os.path.basename(file.path)
-            found = self.drive.find_file_by_name_and_parent(filename, parent_id)
-            if found is not None:
-                result = self.drive.update_file(
-                    found["id"], file.path, resumable=resumable
-                )
-            else:
-                result = self.drive.upload_file(
-                    file.path, parent_id, resumable=resumable
-                )
-
-        # Update manifest with Drive's response
-        md5 = result.get("md5Checksum", "")
-        if not md5:
-            md5 = compute_md5(file.path) or ""
-
-        self.manifest.set(
-            relative_path=file.relative_path,
-            md5=md5,
-            size=file.size,
-            mtime=file.mtime,
-            drive_file_id=result["id"],
-            drive_parent_id=parent_id,
-        )
-        self._save_manifest_progress()
 
 
 def _format_mtime(mtime: float) -> str:

@@ -144,5 +144,6 @@ token_path: "~/.drive-backup/token.json"
 
 # Upload behavior
 resumable_threshold_mb: 5
-max_retries: 3
-writes_per_second: 2.5
+upload_workers: 8
+max_retries: 8
+writes_per_second: 0

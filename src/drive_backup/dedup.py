@@ -17,7 +17,7 @@ from drive_backup.utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE = 8192
+CHUNK_SIZE = 1024 * 1024
 
 
 @dataclass

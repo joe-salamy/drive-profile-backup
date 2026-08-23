@@ -801,13 +801,15 @@ class TestBackupEngineUploadErrors:
             exclude_files=[],
             manifest_path=str(state_dir / "manifest.json"),
         )
-
         with pytest.raises(ManifestProgressError):
             BackupEngine(
                 config, dry_run=False, collect_machine_state_snapshot=False
             ).run()
 
-        assert len(upload_calls) == 1
+        # With 30s checkpoint interval and 8 workers, both files are in-flight
+        # before the final forced checkpoint fails; the failure stops further
+        # submission beyond in-flight calls and skips snapshot/report uploads.
+        assert len(upload_calls) == 2
 
     def test_report_upload_error_does_not_fail_backup(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

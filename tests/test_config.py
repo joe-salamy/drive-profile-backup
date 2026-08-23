@@ -83,7 +83,9 @@ class TestConfigDefaults:
 
     def test_rejects_invalid_numeric_values(self) -> None:
         with pytest.raises(ValueError, match="writes_per_second"):
-            Config(profile_name="laptop-a", writes_per_second=0)
+            Config(profile_name="laptop-a", writes_per_second=-1)
+        with pytest.raises(ValueError, match="writes_per_second"):
+            Config(profile_name="laptop-a", writes_per_second=float("inf"))
         with pytest.raises(ValueError, match="max_retries"):
             Config(profile_name="laptop-a", max_retries=0)
         with pytest.raises(ValueError, match="max_file_size_mb"):

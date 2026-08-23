@@ -28,6 +28,12 @@ Edit `config.yaml` before running a backup:
 - `credentials_path`: local OAuth client JSON path; default is `credentials.json`.
 - `token_path`: local OAuth token path; default is `~/.drive-backup/token.json`.
 - `machine_state_collectors`: ordered list of generated Windows/WSL inventories to refresh; the example lists every supported collector.
+- `upload_workers`: parallel Drive upload workers; defaults to 8 (`config.example.yaml`) and 16 in the workstation `config.yaml`.
+- `max_retries`: retry budget for rate-limited or transient Drive errors (`429`/`500`/`503` and rate-limit `403`); defaults to 8.
+- `writes_per_second`: client write throttle; `0` disables client throttling (unlimited) and relies on server-directed retries, while a positive value imposes a process-wide writes/second ceiling shared by all upload workers.
+- `resumable_threshold_mb`: files larger than this use resumable uploads; defaults to 5 MB.
+
+Performance: uploads use a bounded worker pool (`upload_workers` with at most `2 * upload_workers` in-flight tasks). The local manifest checkpoints every ~30 seconds and on clean completion or `Ctrl+C`; a hard stop may repeat at most ~30 seconds of completed uploads, reconciled by name/parent on the next run. For NTFS backup roots, prefer native Windows Python/PowerShell; reading `/mnt/c` through WSL adds filesystem-bridge overhead that concurrency cannot remove.
 
 ## Run
 

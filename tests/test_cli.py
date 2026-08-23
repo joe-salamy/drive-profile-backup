@@ -156,16 +156,16 @@ class TestCliMain:
         console_module = types.ModuleType("rich.console")
         progress_module = types.ModuleType("rich.progress")
         table_module = types.ModuleType("rich.table")
-        console_module.Console = FakeConsole
-        progress_module.Progress = FakeProgress
-        progress_module.BarColumn = FakeColumn
-        progress_module.MofNCompleteColumn = FakeColumn
-        progress_module.TextColumn = FakeColumn
-        progress_module.TimeElapsedColumn = FakeColumn
-        table_module.Table = FakeTable
-        rich_module.console = console_module
-        rich_module.progress = progress_module
-        rich_module.table = table_module
+        console_module.Console = FakeConsole  # type: ignore[attr-defined]
+        progress_module.Progress = FakeProgress  # type: ignore[attr-defined]
+        progress_module.BarColumn = FakeColumn  # type: ignore[attr-defined]
+        progress_module.MofNCompleteColumn = FakeColumn  # type: ignore[attr-defined]
+        progress_module.TextColumn = FakeColumn  # type: ignore[attr-defined]
+        progress_module.TimeElapsedColumn = FakeColumn  # type: ignore[attr-defined]
+        table_module.Table = FakeTable  # type: ignore[attr-defined]
+        rich_module.console = console_module  # type: ignore[attr-defined]
+        rich_module.progress = progress_module  # type: ignore[attr-defined]
+        rich_module.table = table_module  # type: ignore[attr-defined]
 
         monkeypatch.setitem(sys.modules, "rich", rich_module)
         monkeypatch.setitem(sys.modules, "rich.console", console_module)

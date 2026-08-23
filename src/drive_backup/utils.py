@@ -24,7 +24,7 @@ def atomic_write_json(path: str | Path, data: object) -> None:
             delete=False,
         ) as temporary:
             temp_path = temporary.name
-            json.dump(data, temporary, indent=2)
+            json.dump(data, temporary, ensure_ascii=False, separators=(",", ":"))
             temporary.flush()
             os.fsync(temporary.fileno())
         os.replace(temp_path, destination)
