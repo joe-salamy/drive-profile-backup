@@ -67,6 +67,12 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Do not refresh generated machine-state inventories before this backup",
     )
+    parser.add_argument(
+        "--config",
+        default="config.yaml",
+        metavar="PATH",
+        help="Path to config YAML (default: config.yaml)",
+    )
     args = parser.parse_args(argv)
     if args.full and (args.prune or args.prune_trash):
         parser.error(
@@ -115,7 +121,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Load config
     try:
-        config = load_config("config.yaml")
+        config = load_config(args.config)
     except ValueError as e:
         console.print(f"[red]Configuration failed:[/] {e}")
         raise SystemExit(1) from e

@@ -49,9 +49,7 @@ exclude_dirs:
   - ".ruff_cache"
   - ".claude"
   - ".codex"
-  - ".omp"
   - "scoop"
-
 # File name patterns to exclude (supports wildcards)
 exclude_files:
   - "NTUSER.DAT*"
@@ -74,10 +72,17 @@ exclude_files:
 # Path patterns to exclude (matched against relative path using wildcards)
 exclude_path_patterns:
   - "*/harness-info/*.html" # Generated OMP reports and overviews
+  - ".omp/*" # Keep OMP runtime state excluded except whitelisted session/config/docs
 
 # Path patterns to include even when their parent directory is excluded
-include_path_patterns: []
-
+include_path_patterns:
+  - ".omp/agent/sessions/*.jsonl"
+  - ".omp/agent/sessions/**/*.jsonl"
+  - ".omp/*.md"
+  - ".omp/*.py"
+  - ".omp/*.txt"
+  - ".omp/agent/config.yml"
+  - ".omp/scripts/**"
 # Specific files to exclude (exact relative paths, forward slashes)
 exclude_specific_files: []
 
