@@ -1,0 +1,172 @@
+# WSL home backup — run with: drive-backup --config config.wsl.yaml
+# Backs up /home/joesa (ext4 WSL disk) to Drive folder "Laptop Backups/Inspiron 15 3535-wsl"
+# Separate from Windows profile "Inspiron 15 3535" (C:\Users\joesa)
+
+backup_root: "/home/joesa"
+
+exclude_dirs:
+  - "venv"
+  - ".venv"
+  - "env"
+  - ".git"
+  - "__pycache__"
+  - "node_modules"
+  - ".next"
+  - ".turbo"
+  - ".parcel-cache"
+  - ".svelte-kit"
+  - ".nuxt"
+  - ".vite"
+  - ".angular"
+  - ".serverless"
+  - ".webpack"
+  - ".docusaurus"
+  - ".sass-cache"
+  - ".jekyll-cache"
+  - "dist"
+  - "build"
+  - "coverage"
+  - "htmlcov"
+  - "*.egg-info"
+  - ".local"
+  - ".cache"
+  - "cache"
+  - ".npm"
+  - ".pnpm-store"
+  - ".yarn"
+  - ".gradle"
+  - ".hypothesis"
+  - ".ipynb_checkpoints"
+  - ".eggs"
+  - ".pyre"
+  - ".pytype"
+  - ".vscode"
+  - "edge_selenium_profile"
+  - ".azure-functions-core-tools"
+  - ".copilot"
+  - ".docker"
+  - ".tox"
+  - ".mypy_cache"
+  - ".pytest_cache"
+  - ".ruff_cache"
+  - ".codex"
+  - ".omp" # keep excluded except whitelisted DBs/sessions below
+  - ".drive-backup"
+  - ".ollama"
+  - ".bun"
+  - "omp-edge-profile"
+  - ".azcopy"
+  - ".vscode-server"
+  - ".vscode-shared"
+  - ".matplotlib"
+  - ".chocolatey"
+  - "logs"
+  - ".tmp"
+  - ".tmp-pytest-clean"
+  - ".ssh" # private keys must not be uploaded unencrypted
+  - ".azure"
+  - ".cisco"
+  - "node24" # 205M standalone Node — re-downloadable
+  - ".grip" # 2.4M grip cache — re-downloadable
+  - ".npm-global" # 444K npm global prefix — re-downloadable
+
+exclude_files:
+  - "NTUSER.DAT*"
+  - "ntuser.*"
+  - "Thumbs.db"
+  - "desktop.ini"
+  - "*.tmp"
+  - "*.lnk"
+  - "*.pyc"
+  - "*.pyo"
+  - "*.tsbuildinfo"
+  - ".coverage"
+  - ".coverage.*"
+  - "*.cache"
+  - ".eslintcache"
+  - ".stylelintcache"
+  - ".dmypy.json"
+  - "coverage.xml"
+  - ".env"
+  - ".env.local"
+  - ".env.*.local"
+  - "credentials.json"
+  - "token.json"
+  - "id_rsa"
+  - "id_rsa.pub"
+  - "id_ed25519"
+  - "id_ed25519.pub"
+  - "*.pem"
+  - "*.key"
+  - "*.p12"
+  - "*.pfx"
+  - ".boto"
+  - ".claude.json*"
+  - ".lesshst"
+  - ".node_repl_history"
+  - "*(MERGED, BAD).*"
+  - "TEST *.m4a"
+  - "*TRIM TEST*.m4a"
+
+exclude_path_patterns:
+  - "*/open-law-notes/*.wav"
+  - "*/harness-info/*.html"
+  - ".omp/*" # keep OMP state excluded except whitelisted below
+  - "Code/shelf/textbook-tests/*"
+  - "Code/room-reserver/drivers/*"
+  - "*/lecture-processed/audio/*.wav"
+  - "Code/law-essay-gen/projects/*"
+  - ".config/google-chrome-for-testing/*" # 42M browser cache — re-downloadable
+  - ".config/google-chrome-for-testing/**" # ensure deep cache excluded
+# Preserve WSL dotfiles + OMP agent state. .omp/* stays excluded except these.
+include_path_patterns:
+  - ".omp/agent/sessions/*.jsonl"
+  - ".omp/agent/sessions/**/*.jsonl"
+  - ".omp/agent/*.db"
+  - ".omp/agent/*.db-wal"
+  - ".omp/agent/*.db-shm"
+  - ".omp/agent/*.db-journal"
+  - ".omp/agent/config.yml"
+  - ".gemini/*.json"
+  - ".gemini/**/*.json"
+  - ".gemini/history/**"
+
+exclude_specific_files:
+  - ".codex/log/codex-tui.log"
+
+exclude_symlinks: true
+max_file_size_mb: 150
+size_limits_by_type:
+  ".iso": 0
+  ".exe": 0
+  ".msi": 0
+  ".dll": 0
+  ".ort": 0
+no_size_limit:
+  - ".jpg"
+  - ".jpeg"
+  - ".png"
+  - ".gif"
+  - ".bmp"
+  - ".heic"
+  - ".webp"
+  - ".mp4"
+  - ".mov"
+  - ".avi"
+  - ".mkv"
+  - ".wmv"
+  - ".mp3"
+  - ".wav"
+  - ".flac"
+  - ".aac"
+  - ".ogg"
+
+profile_name: "Inspiron 15 3535-wsl"
+drive_parent_folder_name: "Laptop Backups"
+credentials_path: "credentials.json"
+manifest_path: "~/.drive-backup/profiles/Inspiron 15 3535-wsl/manifest.json"
+token_path: "~/.drive-backup/token.json"
+resumable_threshold_mb: 5
+upload_workers: 16
+max_retries: 8
+writes_per_second: 0
