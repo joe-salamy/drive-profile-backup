@@ -22,6 +22,8 @@ def restore_backup(
     output_dir: str,
     dry_run: bool = False,
     force: bool = False,
+    decrypt: bool = True,
+    decrypt_key_path: str | None = None,
 ) -> dict[str, Any]:
     """Download non-pruned files from the Drive manifest snapshot.
 
@@ -66,6 +68,43 @@ def restore_backup(
     pruned_files: list[str] = []
     errors: list[dict[str, str]] = []
 
+    # Determine decryption key if needed
+    wants_decrypt = decrypt
+    has_encrypted = any(bool(getattr(e, "encrypted", False)) for e in manifest.entries.values())
+    decrypt_key: bytes | None = None
+    missing_key = False
+    if wants_decrypt and has_encrypted:
+        key_path_raw = decrypt_key_path if decrypt_key_path is not None else config.secrets_key_path
+        expanded_key_path = os.path.expanduser(key_path_raw)
+        try:
+            from drive_backup import crypto
+
+            # Check cryptography availability early
+            # load_key will raise FileNotFoundError or ValueError
+            if not os.path.exists(expanded_key_path):
+                raise FileNotFoundError(expanded_key_path)
+            decrypt_key = crypto.load_key(expanded_key_path)
+        except FileNotFoundError:
+            logger.warning(
+                "Missing secrets key at %s — encrypted files will be restored as .enc",
+                expanded_key_path,
+            )
+            missing_key = True
+            errors.append({"relative_path": "<secrets-key>", "error": "missing secrets key"})
+        except ModuleNotFoundError as e:
+            raise RuntimeError("pip install cryptography required to decrypt") from e
+        except Exception as e:
+            # Handle cryptography import errors that surface as generic Exception
+            if "cryptography" in str(e).lower() or "Crypto" in str(type(e).__name__):
+                raise RuntimeError("pip install cryptography required to decrypt") from e
+            logger.warning(
+                "Failed to load secrets key at %s: %s — encrypted files will be restored as .enc",
+                expanded_key_path,
+                e,
+            )
+            missing_key = True
+            errors.append({"relative_path": "<secrets-key>", "error": f"missing secrets key: {e}"})
+
     for relative_path, entry in sorted(manifest.entries.items()):
         if entry.pruned:
             files_skipped_pruned += 1
@@ -92,7 +131,18 @@ def restore_backup(
             )
             continue
 
-        target = Path(output_dir) / relative_path
+        is_encrypted = bool(getattr(entry, "encrypted", False))
+        # Determine target path based on encryption and decrypt availability
+        if is_encrypted and wants_decrypt and not missing_key and decrypt_key is not None:
+            target = Path(output_dir) / relative_path
+        elif is_encrypted:
+            # Decrypt disabled or key missing — keep .enc suffix
+            if relative_path.endswith(".enc"):
+                target = Path(output_dir) / relative_path
+            else:
+                target = Path(output_dir) / (relative_path + ".enc")
+        else:
+            target = Path(output_dir) / relative_path
         part_path = str(target) + ".part"
 
         if target.exists() and not force:
@@ -104,18 +154,83 @@ def restore_backup(
             bytes_restored += entry.size
             continue
 
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            drive.download_file(entry.drive_file_id, part_path)
-            os.replace(part_path, str(target))
-        except Exception as e:
+        # Encrypted + decrypt available: download to temp then decrypt
+        if is_encrypted and wants_decrypt and not missing_key and decrypt_key is not None:
+            tmp_enc_path: str | None = None
             try:
-                os.unlink(part_path)
-            except OSError:
-                pass
-            files_failed += 1
-            errors.append({"relative_path": relative_path, "error": str(e)})
-            continue
+                # Download ciphertext to temp file
+                fd, tmp_enc_path = tempfile.mkstemp()
+                os.close(fd)
+                drive.download_file(entry.drive_file_id, tmp_enc_path)
+                # Ensure parent exists for output
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # Decrypt to part file then atomically replace
+                from drive_backup import crypto
+
+                # Use part_path as decrypt destination
+                try:
+                    # Ensure part_path parent exists
+                    Path(part_path).parent.mkdir(parents=True, exist_ok=True)
+                    crypto.decrypt_file(tmp_enc_path, part_path, decrypt_key)
+                except ValueError as ve:
+                    raise ValueError(f"decryption failed: {ve}") from ve
+                os.replace(part_path, str(target))
+                # Set restrictive perms for secrets on POSIX
+                if os.name != "nt":
+                    parts = relative_path.split("/")
+                    # Any component is a secrets dir
+                    if any(
+                        p in {".ssh", ".azure", ".gemini", ".android", ".aitk", ".cisco"}
+                        for p in parts[:-1]
+                    ):
+                        try:
+                            os.chmod(str(target), 0o600)
+                        except OSError:
+                            pass
+            except Exception as e:
+                # Cleanup part file if exists
+                try:
+                    os.unlink(part_path)
+                except OSError:
+                    pass
+                # If cryptography not installed, propagate specific message
+                if "cryptography" in str(e).lower():
+                    files_failed += 1
+                    errors.append(
+                        {"relative_path": relative_path, "error": "pip install cryptography required to decrypt"}
+                    )
+                    continue
+                # Decryption failure vs download failure
+                err_msg = str(e)
+                if "decryption failed" in err_msg.lower():
+                    files_failed += 1
+                    errors.append({"relative_path": relative_path, "error": err_msg})
+                    continue
+                files_failed += 1
+                errors.append({"relative_path": relative_path, "error": err_msg})
+                continue
+            finally:
+                if tmp_enc_path is not None:
+                    try:
+                        os.unlink(tmp_enc_path)
+                    except OSError:
+                        pass
+                # Also ensure part_path removed if decrypt failed before replace
+                # (already handled in except, but for success case part_path is gone after replace)
+        else:
+            # Non-encrypted or encrypted fallback (.enc) — direct download
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                drive.download_file(entry.drive_file_id, part_path)
+                os.replace(part_path, str(target))
+            except Exception as e:
+                try:
+                    os.unlink(part_path)
+                except OSError:
+                    pass
+                files_failed += 1
+                errors.append({"relative_path": relative_path, "error": str(e)})
+                continue
 
         files_restored += 1
         bytes_restored += entry.size

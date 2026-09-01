@@ -138,8 +138,10 @@ class TestGenerateReport:
             "excluded_directories_count",
             "machine_state_refreshed",
             "machine_state_collectors",
+            "files_encrypted_uploaded",
+            "bytes_encrypted_uploaded",
+            "total_size_encrypted_human",
         )
-
     def test_report_includes_skipped_files(self) -> None:
         stats = BackupStats(
             skipped_files=[

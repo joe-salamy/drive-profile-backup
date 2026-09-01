@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from drive_backup.config import Config
@@ -67,6 +69,7 @@ class UploadWork:
     file: FileEntry
     reason: str
     existing_drive_file_id: str | None
+    is_encrypted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +77,7 @@ class UploadResult:
     md5: str
     drive_file_id: str
     drive_parent_id: str
+    encrypted: bool = False
 
 
 class BackupEngine:
@@ -109,6 +113,42 @@ class BackupEngine:
         self._prune_protected_paths: set[str] = set()
         self._manifest_dirty: bool = False
         self._last_manifest_checkpoint_at: float = time.monotonic()
+        self._secrets_key: bytes | None = None
+        self._secrets_key_was_generated: bool = False
+
+    def _ensure_secrets_key(self) -> bytes | None:
+        """Load or generate the secrets encryption key if needed."""
+        if not self.config.encrypt_secrets:
+            return None
+        if self._secrets_key is not None:
+            return self._secrets_key
+        if self.dry_run:
+            # Dry-run: do not create key file; only load if present.
+            try:
+                from drive_backup import crypto
+
+                key = crypto.load_key(self.config.secrets_key_path)
+                self._secrets_key = key
+                return key
+            except FileNotFoundError:
+                logger.info(
+                    "Secrets key not found (dry-run); would be generated at %s",
+                    self.config.secrets_key_path,
+                )
+                return None
+            except Exception as e:
+                logger.error("Failed to load secrets key: %s", e)
+                return None
+        try:
+            from drive_backup import crypto
+
+            key, was_generated = crypto.load_or_generate_key(self.config.secrets_key_path)
+            self._secrets_key = key
+            self._secrets_key_was_generated = was_generated
+            return key
+        except Exception as e:
+            logger.error("Failed to load or generate secrets key: %s", e)
+            return None
 
     def run(
         self,
@@ -201,6 +241,9 @@ class BackupEngine:
         # Init checkpoint tracking for this run
         self._manifest_dirty = False
         self._last_manifest_checkpoint_at = time.monotonic()
+
+        # Ensure secrets encryption key is ready (no-op if disabled or dry-run missing)
+        self._ensure_secrets_key()
 
         # Scan and process files
         if self.dry_run:
@@ -485,10 +528,12 @@ class BackupEngine:
                     raise
 
             # Save manifest already handled by checkpoint; but ensure stats end_time already set
+            # Print newly generated key before snapshot (high visibility, once only)
+            if not final_checkpoint_failed:
+                self._maybe_print_generated_key()
             # Upload manifest snapshot (skip if final checkpoint failed)
             if not final_checkpoint_failed:
                 self._upload_manifest_snapshot()
-
             # Generate report
             report = generate_report(self.stats)
 
@@ -591,8 +636,59 @@ class BackupEngine:
         self._manifest_dirty = False
         self._last_manifest_checkpoint_at = now
 
+    def _maybe_print_generated_key(self) -> None:
+        """Print the newly generated secrets key with high visibility."""
+        if not self._secrets_key_was_generated or self._secrets_key is None:
+            return
+        if self.dry_run:
+            return
+        try:
+            from drive_backup import crypto
+
+            display = crypto.format_key_display(
+                self._secrets_key, self.config.secrets_key_path
+            )
+            hex_key = display["hex"]
+            b64_key = display["base64"]
+            path = display["path"]
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.text import Text
+
+            console = Console()
+            body = Text()
+            body.append(f"Path: {path}\n", style="bold")
+            body.append(f"Hex:   {hex_key}\n", style="cyan")
+            body.append(f"Base64: {b64_key}\n", style="green")
+            body.append("\n")
+            body.append(
+                "Without this key encrypted backups on Drive CANNOT be decrypted.\n",
+                style="bold red",
+            )
+            body.append(
+                "Store offline (USB, 1Password, print). This is shown ONLY once at generation.",
+                style="yellow",
+            )
+            panel = Panel(
+                body,
+                title="[bold red]NEW SECRETS ENCRYPTION KEY — COPY AND SAVE NOW[/]",
+                border_style="red",
+                expand=False,
+            )
+            console.print(panel)
+            logger.warning(
+                "NEW SECRETS ENCRYPTION KEY generated at %s — hex: %s base64: %s",
+                path,
+                hex_key,
+                b64_key,
+            )
+            logger.warning(
+                "Without this key encrypted backups on Drive CANNOT be decrypted. Store offline."
+            )
+        except Exception as e:
+            logger.warning("Failed to display generated secrets key: %s", e)
+
     def _upload_manifest_snapshot(self) -> None:
-        """Upload the local manifest as a snapshot to Drive/_meta/manifest.json."""
         if self.drive is None:
             return
         try:
@@ -671,11 +767,47 @@ class BackupEngine:
                 progress_callback(file, ProgressEvent(ProgressKind.SKIPPED))
             return None
 
+        is_encrypted = bool(getattr(file, "encrypted", False))
+
+        # Encrypted files require a key (except dry-run where we simulate)
+        if is_encrypted and self._secrets_key is None and not self.dry_run:
+            logger.error(
+                "Skipping encrypted file %s: missing secrets key at %s",
+                file.relative_path,
+                self.config.secrets_key_path,
+            )
+            self.stats.files_skipped_error += 1
+            self.stats.error_files.append(
+                ErrorFile(
+                    path=file.path,
+                    relative_path=file.relative_path,
+                    error="encrypted_missing_key",
+                )
+            )
+            if progress_callback:
+                progress_callback(file, ProgressEvent(ProgressKind.ERROR))
+            return None
+
         # Eligible file — track total
         self.stats.bytes_total_eligible += file.size
 
-        # Dedup check
+        # Dedup check (plaintext MD5 for encrypted files as well)
         should_upload, reason = needs_upload(file, self.manifest)
+
+        # If encrypted flag mismatches stored entry, force re-upload (either direction:
+        # plaintext->encrypted or encrypted->plaintext, Drive filename changes).
+        existing_entry = self.manifest.get(file.relative_path)
+        if existing_entry is not None and existing_entry.encrypted != is_encrypted:
+            should_upload = True
+            reason = "content_changed"
+
+        # Tag reason for encrypted files
+        if is_encrypted and should_upload:
+            if self.dry_run and self._secrets_key is None:
+                reason = f"{reason} (encrypted, key will be generated)"
+            else:
+                reason = f"{reason} (encrypted)"
+
         if not should_upload:
             self.stats.files_skipped_dedup += 1
             if progress_callback:
@@ -686,6 +818,9 @@ class BackupEngine:
         if self.dry_run:
             self.stats.files_uploaded += 1
             self.stats.bytes_uploaded += file.size
+            if is_encrypted:
+                self.stats.files_encrypted_uploaded += 1
+                self.stats.bytes_encrypted_uploaded += file.size
             self._record_upload(file)
             if progress_callback:
                 progress_callback(
@@ -693,24 +828,24 @@ class BackupEngine:
                 )
             return None
 
-        # Snapshot existing Drive ID for direct-update path
+        # Snapshot existing Drive ID for direct-update path.
+        # Do not reuse ID when encrypted flag changed — Drive filename differs (*.enc).
         existing = self.manifest.get(file.relative_path)
         existing_drive_file_id: str | None = None
-        if (
-            existing
-            and existing.drive_file_id
-            and reason
-            in (
+        if existing and existing.drive_file_id and existing.encrypted == is_encrypted:
+            base_reason = reason.split(" (")[0]
+            if base_reason in (
                 "content_changed",
                 "size_changed",
                 "md5_error",
                 "restored",
-            )
-        ):
-            existing_drive_file_id = existing.drive_file_id
-
+            ):
+                existing_drive_file_id = existing.drive_file_id
         return UploadWork(
-            file=file, reason=reason, existing_drive_file_id=existing_drive_file_id
+            file=file,
+            reason=reason,
+            existing_drive_file_id=existing_drive_file_id,
+            is_encrypted=is_encrypted,
         )
 
     def _execute_upload(self, work: UploadWork) -> UploadResult:
@@ -718,6 +853,71 @@ class BackupEngine:
         assert self.drive is not None
         file = work.file
 
+        # Encrypted path — encrypt to temp file and upload as *.enc
+        if work.is_encrypted:
+            assert self._secrets_key is not None, "secrets key required for encrypted upload"
+            # Normalize Windows long path prefix for reading
+            plaintext_path = file.path
+            if plaintext_path.startswith("\\\\?\\"):
+                plaintext_path = plaintext_path[4:]
+            # Determine Drive parent (original relative dir, no .enc)
+            rel_dir = os.path.dirname(file.relative_path)
+            if rel_dir:
+                path_parts = rel_dir.split("/")
+                parent_id = self.drive.ensure_folder_path(path_parts, self._root_folder_id)
+            else:
+                parent_id = self._root_folder_id
+            # Encrypted filename is original basename + .enc
+            base_name = os.path.basename(file.relative_path)
+            if base_name.endswith(".enc"):
+                filename_enc = base_name
+            else:
+                filename_enc = base_name + ".enc"
+            # Create temp ciphertext file with correct Drive name
+            tmpdir: str | None = None
+            enc_path: str | None = None
+            try:
+                tmpdir = tempfile.mkdtemp(prefix="enc-")
+                enc_path = os.path.join(tmpdir, filename_enc)
+                from drive_backup import crypto
+
+                crypto.encrypt_file(plaintext_path, enc_path, self._secrets_key)
+                resumable = os.path.getsize(enc_path) > self.config.resumable_threshold_bytes
+                if work.existing_drive_file_id:
+                    result = self.drive.update_file(
+                        work.existing_drive_file_id, enc_path, resumable=resumable
+                    )
+                else:
+                    found = self.drive.find_file_by_name_and_parent(filename_enc, parent_id)
+                    if found is not None:
+                        result = self.drive.update_file(
+                            found["id"], enc_path, resumable=resumable
+                        )
+                    else:
+                        result = self.drive.upload_file(
+                            enc_path, parent_id, resumable=resumable
+                        )
+                # Use plaintext MD5 for manifest dedup (Drive md5 is ciphertext)
+                md5_plain = compute_md5(plaintext_path) or ""
+                drive_file_id = str(result.get("id", ""))
+                return UploadResult(
+                    md5=md5_plain,
+                    drive_file_id=drive_file_id,
+                    drive_parent_id=parent_id,
+                    encrypted=True,
+                )
+            finally:
+                if enc_path is not None:
+                    try:
+                        os.unlink(enc_path)
+                    except OSError:
+                        pass
+                if tmpdir is not None:
+                    try:
+                        os.rmdir(tmpdir)
+                    except OSError:
+                        pass
+        # Non-encrypted path — original logic
         # Determine the parent folder on Drive
         rel_dir = os.path.dirname(file.relative_path)
         if rel_dir:
@@ -750,7 +950,6 @@ class BackupEngine:
         return UploadResult(
             md5=md5, drive_file_id=drive_file_id, drive_parent_id=parent_id
         )
-
     def _complete_upload(
         self,
         work: UploadWork,
@@ -761,7 +960,11 @@ class BackupEngine:
         file = work.file
         md5 = result.md5
         if not md5:
-            md5 = compute_md5(file.path) or ""
+            # For encrypted, compute plaintext MD5; for others, file.path
+            norm = file.path
+            if norm.startswith("\\\\?\\"):
+                norm = norm[4:]
+            md5 = compute_md5(norm) or ""
 
         self.manifest.set(
             relative_path=file.relative_path,
@@ -770,10 +973,16 @@ class BackupEngine:
             mtime=file.mtime,
             drive_file_id=result.drive_file_id,
             drive_parent_id=result.drive_parent_id,
+            encrypted=work.is_encrypted or result.encrypted,
         )
         self._manifest_dirty = True
         self.stats.files_uploaded += 1
         self.stats.bytes_uploaded += file.size
+        if work.is_encrypted or result.encrypted:
+            if hasattr(self.stats, "files_encrypted_uploaded"):
+                self.stats.files_encrypted_uploaded += 1  # type: ignore[attr-defined]
+            if hasattr(self.stats, "bytes_encrypted_uploaded"):
+                self.stats.bytes_encrypted_uploaded += file.size  # type: ignore[attr-defined]
         self._record_upload(file)
         if progress_callback:
             progress_callback(file, ProgressEvent(ProgressKind.UPLOADED, work.reason))
@@ -781,7 +990,6 @@ class BackupEngine:
         # Caller decides when to flush; we don't auto-flush here to allow batching,
         # but the outer loop will call _maybe_save after each completion.
         # However to keep the contract that _complete marks dirty, we leave flush to caller.
-
     def _record_upload_error(
         self,
         work: UploadWork,

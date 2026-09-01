@@ -413,7 +413,7 @@ class TestCliMain:
         monkeypatch.setattr("drive_backup.engine.BackupEngine", FakeBackupEngine)
         monkeypatch.setattr(
             "drive_backup.restore.restore_backup",
-            lambda config, output_dir, dry_run=False, force=False: result,
+            lambda config, output_dir, dry_run=False, force=False, decrypt=True, decrypt_key_path=None, **kwargs: result,
         )
 
         main(["--restore", "--output", str(output_dir)])

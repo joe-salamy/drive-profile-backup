@@ -101,7 +101,9 @@ class BackupReport(TypedDict):
     excluded_directories_count: int
     machine_state_refreshed: bool
     machine_state_collectors: list[MachineStateCollectorRow]
-
+    files_encrypted_uploaded: int
+    bytes_encrypted_uploaded: int
+    total_size_encrypted_human: str
 
 @dataclass
 class SkippedFile:
@@ -152,8 +154,6 @@ class PruneError:
     relative_path: str
     drive_file_id: str
     error: str
-
-
 @dataclass
 class BackupStats:
     """Accumulated statistics for a backup run."""
@@ -190,6 +190,8 @@ class BackupStats:
     manifest_snapshot_error: str = ""
     machine_state_refreshed: bool = False
     machine_state_collectors: list[CollectorOutcome] = field(default_factory=list)
+    files_encrypted_uploaded: int = 0
+    bytes_encrypted_uploaded: int = 0
 
     @property
     def duration_seconds(self) -> float:
@@ -323,6 +325,9 @@ def generate_report(stats: BackupStats) -> BackupReport:
             }
             for outcome in stats.machine_state_collectors
         ],
+        "files_encrypted_uploaded": stats.files_encrypted_uploaded,
+        "bytes_encrypted_uploaded": stats.bytes_encrypted_uploaded,
+        "total_size_encrypted_human": human_size(stats.bytes_encrypted_uploaded),
     }
 
 

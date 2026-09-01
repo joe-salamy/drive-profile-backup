@@ -31,7 +31,7 @@ class ManifestEntry:
     drive_parent_id: str
     last_uploaded: str  # ISO timestamp
     pruned: bool = False
-
+    encrypted: bool = False
 
 class ManifestLoadError(RuntimeError):
     """Raised when an existing manifest cannot be loaded safely."""
@@ -46,8 +46,7 @@ _MANIFEST_ENTRY_FIELDS = {
     "last_uploaded",
 }
 _MANIFEST_ENTRY_STRING_FIELDS = _MANIFEST_ENTRY_FIELDS - {"size", "mtime"}
-
-
+_MANIFEST_ENTRY_OPTIONAL_BOOL_FIELDS = {"pruned", "encrypted"}
 def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
     if not isinstance(data, Mapping):
         raise ValueError("manifest root must be a mapping")
@@ -64,7 +63,7 @@ def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
             raise ValueError("manifest file paths must be strings")
         if not isinstance(entry_data, Mapping):
             raise ValueError(f"entry {relative_path!r} must be a mapping")
-        unknown = set(entry_data) - (_MANIFEST_ENTRY_FIELDS | {"pruned"})
+        unknown = set(entry_data) - (_MANIFEST_ENTRY_FIELDS | _MANIFEST_ENTRY_OPTIONAL_BOOL_FIELDS)
         if unknown:
             raise ValueError(
                 f"entry {relative_path!r} contains unknown keys: "
@@ -79,6 +78,9 @@ def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
         pruned = entry_data.get("pruned", False)
         if type(pruned) is not bool:
             raise ValueError(f"entry {relative_path!r} pruned must be a boolean")
+        encrypted = entry_data.get("encrypted", False)
+        if type(encrypted) is not bool:
+            raise ValueError(f"entry {relative_path!r} encrypted must be a boolean")
         if not all(
             isinstance(entry_data[field_name], str)
             for field_name in _MANIFEST_ENTRY_STRING_FIELDS
@@ -104,9 +106,9 @@ def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
             drive_parent_id=entry_data["drive_parent_id"],
             last_uploaded=entry_data["last_uploaded"],
             pruned=pruned,
+            encrypted=encrypted,
         )
     return entries
-
 
 @dataclass
 class Manifest:
@@ -165,6 +167,7 @@ class Manifest:
         drive_parent_id: str,
         *,
         pruned: bool = False,
+        encrypted: bool = False,
     ) -> None:
         """Record an uploaded file in the manifest."""
         self.entries[relative_path] = ManifestEntry(
@@ -175,8 +178,8 @@ class Manifest:
             drive_parent_id=drive_parent_id,
             last_uploaded=datetime.now(timezone.utc).isoformat(),
             pruned=pruned,
+            encrypted=encrypted,
         )
-
 
 def compute_md5(path: str) -> str | None:
     """Compute MD5 hex digest of a file, streaming in chunks.

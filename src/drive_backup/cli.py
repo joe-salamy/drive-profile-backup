@@ -68,6 +68,36 @@ def main(argv: list[str] | None = None) -> None:
         help="Do not refresh generated machine-state inventories before this backup",
     )
     parser.add_argument(
+        "--no-encrypt-secrets",
+        action="store_true",
+        help="Do not encrypt secret files; they will be skipped",
+    )
+    parser.add_argument(
+        "--decrypt",
+        dest="decrypt",
+        action="store_true",
+        help="Decrypt encrypted files on restore (default)",
+    )
+    parser.add_argument(
+        "--no-decrypt",
+        dest="decrypt",
+        action="store_false",
+        help="Do not decrypt on restore; keep .enc files",
+    )
+    parser.set_defaults(decrypt=True)
+    parser.add_argument(
+        "--decrypt-key",
+        metavar="PATH",
+        dest="decrypt_key",
+        default=None,
+        help="Path to secrets key for restore decryption (default: secrets_key_path from config)",
+    )
+    parser.add_argument(
+        "--generate-secrets-key",
+        action="store_true",
+        help="Generate and display a new secrets encryption key and exit",
+    )
+    parser.add_argument(
         "--config",
         default="config.yaml",
         metavar="PATH",
@@ -118,13 +148,61 @@ def main(argv: list[str] | None = None) -> None:
     from drive_backup.engine import BackupEngine, ProgressKind
 
     console = Console()
-
     # Load config
     try:
         config = load_config(args.config)
     except ValueError as e:
         console.print(f"[red]Configuration failed:[/] {e}")
         raise SystemExit(1) from e
+
+    # Apply CLI overrides for encryption
+    if args.no_encrypt_secrets:
+        config.encrypt_secrets = False
+
+    # Handle key generation helper
+    if args.generate_secrets_key:
+        from drive_backup import crypto
+        from rich.panel import Panel
+        from rich.text import Text
+
+        key_path = args.decrypt_key or config.secrets_key_path
+        try:
+            key, was_generated = crypto.load_or_generate_key(key_path)
+            display = crypto.format_key_display(key, key_path)
+            body = Text()
+            body.append(f"Path: {display['path']}\n", style="bold")
+            body.append(f"Hex:   {display['hex']}\n", style="cyan")
+            body.append(f"Base64: {display['base64']}\n", style="green")
+            body.append("\n")
+            body.append(
+                "Without this key encrypted backups on Drive CANNOT be decrypted.\n",
+                style="bold red",
+            )
+            body.append(
+                "Store offline (USB, 1Password, print). This is shown ONLY once at generation.",
+                style="yellow",
+            )
+            title = (
+                "[bold red]NEW SECRETS ENCRYPTION KEY — COPY AND SAVE NOW[/]"
+                if was_generated
+                else "[bold]Existing secrets key[/]"
+            )
+            panel = Panel(
+                body,
+                title=title,
+                border_style="red" if was_generated else "green",
+                expand=False,
+            )
+            console.print(panel)
+            if was_generated:
+                console.print("[green]New key generated and saved.[/]")
+            else:
+                console.print("[yellow]Existing key displayed (no new key generated).[/]")
+        except Exception as e:
+            console.print(f"[red]Failed to generate/load secrets key:[/] {e}")
+            raise SystemExit(1) from e
+        return
+
     console.print(f"[bold]Backup root:[/] {config.backup_root}")
     console.print(f"[bold]Profile:[/] {config.profile_name}")
 
@@ -143,6 +221,8 @@ def main(argv: list[str] | None = None) -> None:
                 args.output,
                 dry_run=args.dry_run,
                 force=args.force,
+                decrypt=args.decrypt,
+                decrypt_key_path=args.decrypt_key,
             )
         except RuntimeError as error:
             console.print(f"[red]Restore failed:[/] {error}")
@@ -263,6 +343,15 @@ def _print_summary(
     table.add_row("Files skipped (dedup)", str(report["files_skipped_dedup"]))
     table.add_row("Files skipped (exclusion)", str(report["files_skipped_exclusion"]))
     table.add_row("Files skipped (error)", str(report["files_skipped_error"]))
+    if report.get("files_encrypted_uploaded"):
+        table.add_row(
+            "Files encrypted" if not report["dry_run"] else "Files to encrypt",
+            str(report["files_encrypted_uploaded"]),
+        )
+        table.add_row(
+            "Size encrypted" if not report["dry_run"] else "Size to encrypt",
+            report.get("total_size_encrypted_human", "0.0 B"),
+        )
     table.add_row(
         "Size uploaded" if not report["dry_run"] else "Size to upload",
         report["total_size_uploaded_human"],

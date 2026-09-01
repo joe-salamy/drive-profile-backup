@@ -44,11 +44,14 @@ exclude_dirs:
   - ".pytype"
   - ".vscode"
   - ".tox"
+  - ".nox"
   - ".mypy_cache"
   - ".pytest_cache"
   - ".ruff_cache"
   - ".claude"
   - ".codex"
+  - ".omp"
+  - ".drive-backup"
   - "scoop"
 # File name patterns to exclude (supports wildcards)
 exclude_files:
@@ -139,6 +142,17 @@ machine_state_collectors:
 # Example: "thinkpad" on one laptop, "surface" on another.
 profile_name: "laptop-a"
 drive_parent_folder_name: "Profile Backups"
+
+# Secrets encryption
+# When true, files matching secret patterns (.env, credentials.json, token.json,
+# *.pem, *.key, *.p12, *.pfx, id_rsa*, id_ed25519*, .boto, .claude.json*, etc.)
+# and files inside secrets directories (.ssh, .azure, .gemini, .android, .aitk, .cisco)
+# are encrypted with AES-256-GCM using the key at secrets_key_path and uploaded
+# as *.enc. The key file itself is never uploaded. Keep the key safe — without
+# it encrypted backups on Drive CANNOT be decrypted. Use
+# `drive-backup --generate-secrets-key` to create a new key.
+# encrypt_secrets: true
+# secrets_key_path: "~/.drive-backup/secrets.key"
 
 # Where to store local state
 # In profile mode, the default manifest path is:

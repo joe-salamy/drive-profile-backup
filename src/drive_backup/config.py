@@ -78,6 +78,7 @@ class Config:
             ".claude",
             ".codex",
             ".omp",
+            ".drive-backup",
             "scoop",
         ]
     )
@@ -143,6 +144,8 @@ class Config:
     manifest_path: str = DEFAULT_MANIFEST_PATH
     credentials_path: str = "credentials.json"
     token_path: str = "~/.drive-backup/token.json"
+    secrets_key_path: str = "~/.drive-backup/secrets.key"
+    encrypt_secrets: bool = True
     resumable_threshold_mb: float = 5
     upload_workers: int = 8
     max_retries: int = 8
@@ -150,7 +153,6 @@ class Config:
     machine_state_collectors: list[str] = field(
         default_factory=lambda: list(MACHINE_STATE_COLLECTORS)
     )
-
     def __post_init__(self) -> None:
         if not self.backup_root:
             self.backup_root = str(Path.home())
@@ -193,7 +195,7 @@ class Config:
         self.manifest_path = os.path.expanduser(self.manifest_path)
         self.token_path = os.path.expanduser(self.token_path)
         self.credentials_path = os.path.expanduser(self.credentials_path)
-
+        self.secrets_key_path = os.path.expanduser(self.secrets_key_path)
         # Normalize extensions to lowercase with leading dot
         self.no_size_limit = [
             (ext if ext.startswith(".") else f".{ext}").lower()
@@ -246,6 +248,7 @@ _STRING_FIELDS = {
     "manifest_path",
     "credentials_path",
     "token_path",
+    "secrets_key_path",
 }
 _STRING_LIST_FIELDS = {
     "exclude_dirs",
@@ -270,9 +273,8 @@ _CONFIG_FIELDS = (
     | _STRING_LIST_FIELDS
     | _NUMBER_FIELDS
     | _INTEGER_FIELDS
-    | {"exclude_symlinks", "size_limits_by_type"}
+    | {"exclude_symlinks", "encrypt_secrets", "size_limits_by_type"}
 )
-
 
 def _invalid_value(field_name: str, expectation: str) -> ValueError:
     return ValueError(f"Invalid configuration value for '{field_name}': {expectation}")
@@ -308,6 +310,10 @@ def _validate_config_values(data: Any) -> dict[str, Any]:
                 raise _invalid_value(field_name, "expected a list of strings")
             values[field_name] = value
         elif field_name == "exclude_symlinks":
+            if type(value) is not bool:
+                raise _invalid_value(field_name, "expected a boolean")
+            values[field_name] = value
+        elif field_name == "encrypt_secrets":
             if type(value) is not bool:
                 raise _invalid_value(field_name, "expected a boolean")
             values[field_name] = value
