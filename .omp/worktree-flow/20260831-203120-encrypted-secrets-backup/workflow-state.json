@@ -1,5 +1,5 @@
 {
-  "archive_commit": null,
+  "archive_commit": "2ec8084c93b9e29a298b826d26772491dfa9c079",
   "archive_dir": "/mnt/c/Users/joesa/code/drive-profile-backup/.omp/worktree-flow/20260831-203120-encrypted-secrets-backup",
   "audit_head": "d2003cef15499d541209e2ba20ec24a303862cf5",
   "audit_start_head": "9f802385e177ec95bcfac922915e5942340e7cc8",
@@ -31,5 +31,5 @@
   "run_id": "20260831-203120-encrypted-secrets-backup",
   "schema_version": 2,
   "slug": "encrypted-secrets-backup",
-  "stage": "handoff_archived"
+  "stage": "complete"
 }
