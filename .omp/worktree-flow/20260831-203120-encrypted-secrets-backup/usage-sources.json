@@ -1,0 +1,7 @@
+{
+  "harness": "omp",
+  "harness_dir": ".omp",
+  "run_id": "20260831-203120-encrypted-secrets-backup",
+  "schema_version": 1,
+  "sources": []
+}
