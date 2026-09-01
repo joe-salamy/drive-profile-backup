@@ -27,11 +27,14 @@ Edit `config.yaml` before running a backup:
 - `drive_parent_folder_name`: parent folder in Google Drive.
 - `credentials_path`: local OAuth client JSON path; default is `credentials.json`.
 - `token_path`: local OAuth token path; default is `~/.drive-backup/token.json`.
+- `secrets_key_path`: path to AES-256-GCM key for encrypted secrets; default is `~/.drive-backup/secrets.key` (never uploaded, see `drive-backup --generate-secrets-key`). `encrypt_secrets: true` (default) encrypts `.env`, `credentials.json`, `token.json`, `id_rsa*`, `*.pem`, `.boto`, `.claude.json*` and files under `.ssh`/`.azure`/`.gemini`/`.android`/`.aitk`/`.cisco` as `*.enc` on Drive.
 - `machine_state_collectors`: ordered list of generated Windows/WSL inventories to refresh; the example lists every supported collector.
 - `upload_workers`: parallel Drive upload workers; defaults to 8 (`config.example.yaml`) and 16 in the workstation `config.yaml`.
 - `max_retries`: retry budget for rate-limited or transient Drive errors (`429`/`500`/`503` and rate-limit `403`); defaults to 8.
 - `writes_per_second`: client write throttle; `0` disables client throttling (unlimited) and relies on server-directed retries, while a positive value imposes a process-wide writes/second ceiling shared by all upload workers.
 - `resumable_threshold_mb`: files larger than this use resumable uploads; defaults to 5 MB.
+
+Encrypted secrets: first backup with `encrypt_secrets: true` auto-generates `~/.drive-backup/secrets.key` (`0o600`, 32 bytes, also accepted as hex/base64). **Save it offline** — `drive-backup --generate-secrets-key` prints Hex/Base64 once; without it `*.enc` files on Drive cannot be decrypted. The key file and `~/.drive-backup/` are never uploaded. Restore decrypts by default (`--decrypt`, `--decrypt-key PATH`, `--no-decrypt` to keep `.enc`, `--no-encrypt-secrets` to skip secrets on backup). See `docs/03-secrets.md`.
 
 Performance: uploads use a bounded worker pool (`upload_workers` with at most `2 * upload_workers` in-flight tasks). The local manifest checkpoints every ~30 seconds and on clean completion or `Ctrl+C`; a hard stop may repeat at most ~30 seconds of completed uploads, reconciled by name/parent on the next run. For NTFS backup roots, prefer native Windows Python/PowerShell; reading `/mnt/c` through WSL adds filesystem-bridge overhead that concurrency cannot remove.
 
@@ -44,16 +47,21 @@ drive-backup --full
 drive-backup --prune
 drive-backup --verbose
 drive-backup --skip-machine-state
+drive-backup --generate-secrets-key
+drive-backup --no-encrypt-secrets   # skip secrets (old behavior)
+drive-backup --restore --output $HOME\restore   # decrypts *.enc by default
 ```
 
 Flags:
 
-- `--dry-run`: refresh local machine-state inventories, then scan and report without uploading or pruning. Combine with `--skip-machine-state` for a no-refresh preview.
+- `--dry-run`: refresh local machine-state inventories, then scan and report without uploading or pruning. Combine with `--skip-machine-state` for a no-refresh preview. Report includes `files_encrypted_uploaded` / `total_size_encrypted_human` when secrets are present.
 - `--full`: ignore the manifest and upload every eligible file.
 - `--prune`: move stale Drive files to trash when their manifest entries no longer exist locally.
 - `--verbose`: print per-file actions and DEBUG logs.
 - `--skip-machine-state`: do not refresh generated inventories. Existing snapshots remain eligible for ordinary scan, deduplication, and upload.
-
+- `--generate-secrets-key`: generate and display the AES-256-GCM secrets key (`~/.drive-backup/secrets.key`) and exit — red panel if new (shown once), green if existing.
+- `--no-encrypt-secrets`: do not encrypt secret files; they will be skipped (old "never in Drive" behavior).
+- `--restore --output PATH [--decrypt|--no-decrypt] [--decrypt-key PATH] [--force]`: download non-pruned files from Drive's `manifest.json` snapshot under `_meta/`; decrypts `*.enc` by default using `secrets_key_path` or `--decrypt-key`; `--no-decrypt` keeps `.enc`.
 Machine-state refresh is default-on. Generated JSON files live under `<backup_root>/_machine_state/`, are scanned and uploaded under the Drive profile like ordinary files, and obey all configured scanner exclusions and size limits. Collector failures warn and continue the ordinary backup; a failed collector retains its prior local output when possible and protects its prior remote manifest entry from pruning. WSL collection may start every registered distribution, including stopped distributions.
 
 Machine-state outputs intentionally contain unredacted diagnostics. Environment values can include API keys and other secrets; inventories can also contain network addresses, usernames, domains, serial numbers, package sources, service accounts/paths, and scheduled-task arguments. The feature inventories state only and does not copy arbitrary credential or configuration files from outside `backup_root`.

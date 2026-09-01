@@ -12,7 +12,6 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from drive_backup.config import Config
@@ -979,10 +978,8 @@ class BackupEngine:
         self.stats.files_uploaded += 1
         self.stats.bytes_uploaded += file.size
         if work.is_encrypted or result.encrypted:
-            if hasattr(self.stats, "files_encrypted_uploaded"):
-                self.stats.files_encrypted_uploaded += 1  # type: ignore[attr-defined]
-            if hasattr(self.stats, "bytes_encrypted_uploaded"):
-                self.stats.bytes_encrypted_uploaded += file.size  # type: ignore[attr-defined]
+            self.stats.files_encrypted_uploaded += 1
+            self.stats.bytes_encrypted_uploaded += file.size
         self._record_upload(file)
         if progress_callback:
             progress_callback(file, ProgressEvent(ProgressKind.UPLOADED, work.reason))
