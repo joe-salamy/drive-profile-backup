@@ -20,6 +20,12 @@ pip install -e ".[dev]"
 copy config.example.yaml config.yaml
 ```
 
+Per-machine configs: `drive-backup` picks `--config PATH` when given,
+otherwise `$DRIVE_BACKUP_CONFIG`, otherwise `./config.yaml`. Keep one tracked
+template per OS (`config.example.yaml`, `config.wsl.yaml`, `config.linux.yaml`)
+and give each laptop its own default via the env var or a local (gitignored)
+`config.yaml` copy — no source edits per machine.
+
 Edit `config.yaml` before running a backup:
 
 - `backup_root`: profile directory to scan; blank means the current user's home directory.
@@ -59,6 +65,7 @@ Flags:
 - `--prune`: move stale Drive files to trash when their manifest entries no longer exist locally.
 - `--verbose`: print per-file actions and DEBUG logs.
 - `--skip-machine-state`: do not refresh generated inventories. Existing snapshots remain eligible for ordinary scan, deduplication, and upload.
+- `--config PATH`: use this config file. Overrides `$DRIVE_BACKUP_CONFIG`.
 - `--generate-secrets-key`: generate and display the AES-256-GCM secrets key (`~/.drive-backup/secrets.key`) and exit — red panel if new (shown once), green if existing.
 - `--no-encrypt-secrets`: do not encrypt secret files; they will be skipped (old "never in Drive" behavior).
 - `--restore --output PATH [--decrypt|--no-decrypt] [--decrypt-key PATH] [--force]`: download non-pruned files from Drive's `manifest.json` snapshot under `_meta/`; decrypts `*.enc` by default using `secrets_key_path` or `--decrypt-key`; `--no-decrypt` keeps `.enc`.
@@ -95,7 +102,10 @@ black src tests scripts
 
 ## Environment variables
 
-No required environment variables were found. Runtime configuration is file-based through `config.yaml`, `credentials.json`, and the OAuth token file.
+`DRIVE_BACKUP_CONFIG`: default config file when `--config` is not given
+(e.g. `config.linux.yaml`). Falls back to `./config.yaml`. Per-machine shell
+setup, never committed. `credentials.json`, token, and manifests remain
+file-based local state as above.
 
 ## OMP notes
 

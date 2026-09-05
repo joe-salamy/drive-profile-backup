@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from typing import TYPE_CHECKING
 
@@ -99,9 +100,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--config",
-        default="config.yaml",
+        default=None,
         metavar="PATH",
-        help="Path to config YAML (default: config.yaml)",
+        help=(
+            "Path to config YAML (default: $DRIVE_BACKUP_CONFIG, " "else ./config.yaml)"
+        ),
     )
     args = parser.parse_args(argv)
     if args.full and (args.prune or args.prune_trash):
@@ -143,14 +146,21 @@ def main(argv: list[str] | None = None) -> None:
         TimeElapsedColumn,
     )
 
-    from drive_backup.config import load_config
+    from drive_backup.config import CONFIG_ENV_VAR, load_config, resolve_config_path
     from drive_backup.dedup import ManifestLoadError
     from drive_backup.engine import BackupEngine, ProgressKind
 
     console = Console()
+    # Load config: --config flag beats $DRIVE_BACKUP_CONFIG beats ./config.yaml,
+    # so each machine selects its file without source edits.
+    config_path = resolve_config_path(args.config)
+    if (
+        args.config or os.environ.get(CONFIG_ENV_VAR, "").strip()
+    ) and not os.path.isfile(os.path.expanduser(config_path)):
+        parser.error(f"config file not found: {config_path}")
     # Load config
     try:
-        config = load_config(args.config)
+        config = load_config(config_path)
     except ValueError as e:
         console.print(f"[red]Configuration failed:[/] {e}")
         raise SystemExit(1) from e

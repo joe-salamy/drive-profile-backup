@@ -251,6 +251,58 @@ class TestCliMain:
             in " ".join(capsys.readouterr().out.split())
         )
 
+    def test_env_var_selects_config_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        (tmp_path / "test.txt").write_text("hello")
+        (tmp_path / "env.yaml").write_text(
+            "profile_name: env-profile\n"
+            f"backup_root: {tmp_path}\n"
+            "exclude_dirs: []\n"
+            "exclude_files: []\n"
+            f"manifest_path: {tmp_path / 'manifest.json'}\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("DRIVE_BACKUP_CONFIG", "env.yaml")
+        main(["--dry-run", "--skip-machine-state"])
+        assert "env-profile" in capsys.readouterr().out
+
+    def test_explicit_config_beats_env_var(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        (tmp_path / "test.txt").write_text("hello")
+        for name, profile in (
+            ("env.yaml", "env-profile"),
+            ("flag.yaml", "flag-profile"),
+        ):
+            (tmp_path / name).write_text(
+                f"profile_name: {profile}\n"
+                f"backup_root: {tmp_path}\n"
+                "exclude_dirs: []\n"
+                "exclude_files: []\n"
+                f"manifest_path: {tmp_path / 'manifest.json'}\n"
+            )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("DRIVE_BACKUP_CONFIG", "env.yaml")
+        main(["--dry-run", "--skip-machine-state", "--config", "flag.yaml"])
+        out = capsys.readouterr().out
+        assert "flag-profile" in out
+        assert "env-profile" not in out
+
+    def test_missing_env_config_fails_fast(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("DRIVE_BACKUP_CONFIG", "nope.yaml")
+        with pytest.raises(SystemExit):
+            main(["--dry-run"])
+
     @pytest.mark.parametrize(
         ("extra_args", "expected_collection"),
         [([], True), (["--skip-machine-state"], False)],

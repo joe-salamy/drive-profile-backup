@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from drive_backup.config import MACHINE_STATE_COLLECTORS, Config, load_config
+from drive_backup.config import (
+    CONFIG_ENV_VAR,
+    DEFAULT_CONFIG_FILENAME,
+    MACHINE_STATE_COLLECTORS,
+    Config,
+    load_config,
+    resolve_config_path,
+)
 
 
 class TestConfigDefaults:
@@ -225,3 +232,23 @@ class TestLoadConfig:
 
         with pytest.raises(ValueError, match="Configuration root must be a mapping"):
             load_config(path)
+
+
+class TestResolveConfigPath:
+    def test_explicit_path_beats_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(CONFIG_ENV_VAR, "env.yaml")
+        assert resolve_config_path("flag.yaml") == "flag.yaml"
+
+    def test_env_var_beats_cwd_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(CONFIG_ENV_VAR, "env.yaml")
+        assert resolve_config_path() == "env.yaml"
+
+    def test_blank_env_var_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(CONFIG_ENV_VAR, "   ")
+        assert resolve_config_path() == DEFAULT_CONFIG_FILENAME
+
+    def test_default_is_cwd_config_yaml(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
+        assert resolve_config_path() == "config.yaml"

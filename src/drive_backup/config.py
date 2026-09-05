@@ -11,6 +11,26 @@ from typing import Any
 import yaml
 
 DEFAULT_MANIFEST_PATH = "~/.drive-backup/manifest.json"
+DEFAULT_CONFIG_FILENAME = "config.yaml"
+CONFIG_ENV_VAR = "DRIVE_BACKUP_CONFIG"
+
+
+def resolve_config_path(explicit: str | Path | None = None) -> str:
+    """Resolve which config file to load without per-machine source edits.
+
+    Precedence: explicit --config flag, then DRIVE_BACKUP_CONFIG env var,
+    then ./config.yaml in the current directory. Each laptop keeps its own
+    default via the env var or a local (gitignored) config.yaml, so the
+    tracked code stays identical everywhere.
+    """
+    if explicit:
+        return str(explicit)
+    env = os.environ.get(CONFIG_ENV_VAR, "").strip()
+    if env:
+        return env
+    return DEFAULT_CONFIG_FILENAME
+
+
 MACHINE_STATE_COLLECTORS = (
     "system",
     "windows_apps",
