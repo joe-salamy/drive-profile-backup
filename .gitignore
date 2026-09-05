@@ -6,6 +6,9 @@ env/
 # Local configuration
 config.yaml
 
+# Local helpers (machine-specific, never commit)
+pre-backup.sh
+
 # Environment / secrets
 .env
 .env.*
