@@ -43,6 +43,7 @@ MACHINE_STATE_COLLECTORS = (
     "network",
     "environment",
     "wsl",
+    "git_repos",
 )
 
 
@@ -173,6 +174,7 @@ class Config:
     machine_state_collectors: list[str] = field(
         default_factory=lambda: list(MACHINE_STATE_COLLECTORS)
     )
+
     def __post_init__(self) -> None:
         if not self.backup_root:
             self.backup_root = str(Path.home())
@@ -295,6 +297,7 @@ _CONFIG_FIELDS = (
     | _INTEGER_FIELDS
     | {"exclude_symlinks", "encrypt_secrets", "size_limits_by_type"}
 )
+
 
 def _invalid_value(field_name: str, expectation: str) -> ValueError:
     return ValueError(f"Invalid configuration value for '{field_name}': {expectation}")

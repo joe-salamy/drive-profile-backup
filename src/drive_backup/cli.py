@@ -99,6 +99,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Generate and display a new secrets encryption key and exit",
     )
     parser.add_argument(
+        "--with-github-clone",
+        action="store_true",
+        help="On --restore, clone GitHub repos listed in _machine_state/git_repos.json (greenfield: .git not in Drive)",
+    )
+    parser.add_argument(
         "--config",
         default=None,
         metavar="PATH",
@@ -207,7 +212,9 @@ def main(argv: list[str] | None = None) -> None:
             if was_generated:
                 console.print("[green]New key generated and saved.[/]")
             else:
-                console.print("[yellow]Existing key displayed (no new key generated).[/]")
+                console.print(
+                    "[yellow]Existing key displayed (no new key generated).[/]"
+                )
         except Exception as e:
             console.print(f"[red]Failed to generate/load secrets key:[/] {e}")
             raise SystemExit(1) from e
@@ -233,6 +240,7 @@ def main(argv: list[str] | None = None) -> None:
                 force=args.force,
                 decrypt=args.decrypt,
                 decrypt_key_path=args.decrypt_key,
+                with_github_clone=args.with_github_clone,
             )
         except RuntimeError as error:
             console.print(f"[red]Restore failed:[/] {error}")
@@ -256,6 +264,16 @@ def main(argv: list[str] | None = None) -> None:
         table.add_row("Files skipped (pruned)", str(result["files_skipped_pruned"]))
         table.add_row("Files skipped (existing)", str(result["files_skipped_existing"]))
         table.add_row("Files failed", str(result["files_failed"]))
+        if args.with_github_clone or result.get("git_repos_found"):
+            table.add_row("Git repos found", str(result.get("git_repos_found", 0)))
+            table.add_row("Git cloned", str(result.get("git_cloned", 0)))
+            table.add_row(
+                "Git skipped (existing)", str(result.get("git_skipped_existing", 0))
+            )
+            table.add_row(
+                "Git skipped (no remote)", str(result.get("git_skipped_no_remote", 0))
+            )
+            table.add_row("Git failed", str(result.get("git_failed", 0)))
         console.print(table)
         if args.verbose and result["errors"]:
             console.print(f"\n[red]{len(result['errors'])} files failed:[/]")
@@ -264,6 +282,12 @@ def main(argv: list[str] | None = None) -> None:
                     f"  [red]{restore_error['relative_path']}: "
                     f"{restore_error['error']}[/]"
                 )
+        if args.verbose and result.get("git_errors"):
+            console.print(
+                f"\n[red]{len(result['git_errors'])} git clones failed/skipped:[/]"
+            )
+            for ge in result["git_errors"]:
+                console.print(f"  [red]{ge['relative_path']}: {ge['error']}[/]")
         return
 
     prune_enabled = args.prune or args.prune_trash

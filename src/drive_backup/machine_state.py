@@ -813,6 +813,127 @@ def _collect_wsl(
     return payload, _status(1, int(bool(warnings))), warnings
 
 
+_git_repos_backup_root: str | None = None
+
+
+def _collect_git_repos(
+    powershell: str | None, runner: CommandRunner, wrapper_path: str
+) -> CollectorResult:
+    """Inventory Code git repos (remote + branch) for Drive restore --with-github-clone."""
+    # Backup root is injected by collect_machine_state via module global.
+    backup_root = _git_repos_backup_root or str(Path.home())
+    git = shutil.which("git")
+    if git is None:
+        return (
+            {"repos": [], "repo_count": 0, "github_count": 0, "git_available": False},
+            CollectorStatus.SUCCEEDED,
+            ["git executable not found — git_repos inventory empty"],
+        )
+    code_root = Path(backup_root) / "Code"
+    # Also handle case where backup_root itself is Code (unlikely) — ensure we scan Code.
+    if not code_root.is_dir():
+        # No Code directory — nothing to inventory, but not a failure.
+        return (
+            {"repos": [], "repo_count": 0, "github_count": 0, "git_available": True},
+            CollectorStatus.SUCCEEDED,
+            [],
+        )
+    repos: list[dict[str, object]] = []
+    warnings: list[str] = []
+    # Walk Code tree, pruning .git internals and ephemeral dirs.
+    skip_dir_names = {
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "env",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+        ".hypothesis",
+        "dist",
+        "build",
+        ".next",
+        ".turbo",
+    }
+    # Components that indicate ephemeral/generated and should be skipped entirely.
+    ephemeral_parts = {"logs", ".tmp", ".tmp-pytest-clean", "omp-edge-profile"}
+    for dirpath, dirnames, _ in os.walk(code_root, topdown=True, followlinks=False):
+        # Prune ephemeral / cache dirs early to avoid descending into huge trees.
+        # Also prune hidden ephemeral .git worktree leaves will be handled via .git detection below.
+        # Remove excluded dirnames in-place.
+        # Filter dirnames: skip known caches and ephemeral.
+        original_dirnames = list(dirnames)
+        dirnames[:] = [d for d in dirnames if d not in skip_dir_names and d not in ephemeral_parts]
+        # Also skip any dirname that matches "*.egg-info"
+        dirnames[:] = [d for d in dirnames if not d.endswith(".egg-info")]
+        # Skip nested worktree detection: if any part of relative path contains ephemeral, prune.
+        try:
+            rel_dir = os.path.relpath(dirpath, backup_root).replace("\\", "/")
+        except ValueError:
+            rel_dir = dirpath
+        if any(part in ephemeral_parts for part in Path(rel_dir).parts):
+            dirnames[:] = []
+            continue
+        # Check if this directory contains a .git dir (is a repo root)
+        if ".git" in original_dirnames:
+            git_dir = Path(dirpath) / ".git"
+            if git_dir.is_dir() or git_dir.is_file():
+                # This dirpath is a repo root.
+                relative_path = os.path.relpath(dirpath, backup_root).replace("\\", "/")
+                # Skip ephemeral nested repos (e.g., Code/open-law-notes/logs/omp-harness/... )
+                if any(part in ephemeral_parts for part in Path(relative_path).parts):
+                    continue
+                remote_url = ""
+                has_remote = False
+                has_github = False
+                branch = ""
+                sha = ""
+                # remote get-url origin
+                result, error = _run_catching([git, "-C", dirpath, "remote", "get-url", "origin"], timeout=COMMAND_TIMEOUT, runner=runner)
+                if error is None and result is not None and result.returncode == 0:
+                    remote_url = result.stdout.strip()
+                    has_remote = bool(remote_url)
+                    has_github = "github.com" in remote_url.lower()
+                elif error is not None:
+                    warnings.append(f"{relative_path}: remote probe: {error}")
+                # branch
+                result2, error2 = _run_catching([git, "-C", dirpath, "rev-parse", "--abbrev-ref", "HEAD"], timeout=COMMAND_TIMEOUT, runner=runner)
+                if error2 is None and result2 is not None and result2.returncode == 0:
+                    branch = result2.stdout.strip()
+                # sha
+                result3, error3 = _run_catching([git, "-C", dirpath, "rev-parse", "HEAD"], timeout=COMMAND_TIMEOUT, runner=runner)
+                if error3 is None and result3 is not None and result3.returncode == 0:
+                    sha = result3.stdout.strip()
+                repos.append(
+                    {
+                        "relative_path": relative_path,
+                        "remote_url": remote_url,
+                        "has_remote": has_remote,
+                        "has_github": has_github,
+                        "branch": branch,
+                        "sha": sha,
+                    }
+                )
+                # Do not descend into this repo's subdirectories for further repo detection
+                # (nested .git worktrees inside logs are already pruned via ephemeral_parts).
+                # Keep dirnames pruned to avoid walking .git internals (already removed).
+                continue
+    # Sort for determinism
+    repos.sort(key=lambda r: str(r["relative_path"]))
+    github_count = sum(1 for r in repos if r["has_github"])
+    payload = {
+        "repos": repos,
+        "repo_count": len(repos),
+        "github_count": github_count,
+        "git_available": True,
+    }
+    return payload, CollectorStatus.SUCCEEDED, warnings
+
+
 _COLLECTORS: dict[str, Collector] = {
     "system": _single_powershell_collector(_SYSTEM_SCRIPT, "system"),
     "windows_apps": _single_powershell_collector(_WINDOWS_APPS_SCRIPT, "windows_apps"),
@@ -827,6 +948,7 @@ _COLLECTORS: dict[str, Collector] = {
     "network": _collect_network,
     "environment": _single_powershell_collector(_ENVIRONMENT_SCRIPT, "environment"),
     "wsl": _collect_wsl,
+    "git_repos": _collect_git_repos,
 }
 
 
@@ -859,6 +981,8 @@ def collect_machine_state(
     runner: CommandRunner = run_command,
 ) -> list[CollectorOutcome]:
     """Refresh selected inventories while isolating every collector failure."""
+    global _git_repos_backup_root
+    _git_repos_backup_root = backup_root
     started_at = _utc_now()
     output_dir = Path(backup_root) / MACHINE_STATE_DIRECTORY
     snapshot_path = output_dir / "snapshot.json"
@@ -871,6 +995,7 @@ def collect_machine_state(
     except OSError as error:
         warning = _warning("Could not create machine-state directory", error)
         logger.warning(warning)
+        _git_repos_backup_root = None
         return [
             CollectorOutcome(
                 name="snapshot",
@@ -980,4 +1105,6 @@ def collect_machine_state(
                 previous_output_retained=snapshot_existed,
             )
         )
+    finally:
+        _git_repos_backup_root = None
     return outcomes

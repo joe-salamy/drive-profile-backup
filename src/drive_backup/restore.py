@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,95 @@ _RESTORE_ERROR_UNSAFE_PATH = "unsafe path"
 _RESTORE_ERROR_MISSING_FILE_ID = "missing Drive file ID"
 
 
+def _is_safe_relative_path(relative_path: str) -> bool:
+    return not (os.path.isabs(relative_path) or ".." in Path(relative_path).parts)
+
+
+def _clone_or_init_git_repo(
+    target: Path, remote_url: str, dry_run: bool = False
+) -> tuple[bool, str | None]:
+    """Populate .git for target via clone or init+fetch. Returns (ok, error)."""
+    if dry_run:
+        return True, None
+    git = shutil.which("git")
+    if git is None:
+        return False, "git executable not found"
+    target_exists = target.exists()
+    is_empty = True
+    if target_exists:
+        try:
+            is_empty = not any(target.iterdir())
+        except OSError:
+            is_empty = False
+        if (target / ".git").exists():
+            return True, None  # already has .git
+        # Target has files but no .git — use init+fetch to preserve restored files.
+        if not is_empty:
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+                # init
+                result = subprocess.run(
+                    [git, "init"], cwd=str(target), capture_output=True, text=True, timeout=120
+                )
+                if result.returncode != 0:
+                    return False, f"git init failed: {result.stderr.strip() or result.stdout.strip()}"
+                result = subprocess.run(
+                    [git, "remote", "add", "origin", remote_url],
+                    cwd=str(target),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if result.returncode != 0:
+                    # remote may already exist — try set-url
+                    result2 = subprocess.run(
+                        [git, "remote", "set-url", "origin", remote_url],
+                        cwd=str(target),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if result2.returncode != 0:
+                        return False, f"git remote add failed: {result.stderr.strip()}"
+                result = subprocess.run(
+                    [git, "fetch", "origin"],
+                    cwd=str(target),
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                if result.returncode != 0:
+                    return False, f"git fetch failed: {result.stderr.strip() or result.stdout.strip()}"
+                return True, None
+            except subprocess.TimeoutExpired:
+                return False, "git operation timed out"
+            except Exception as e:
+                return False, str(e)
+    # Empty or non-existent — clone
+    try:
+        # Ensure parent exists
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # If target exists and empty, rmdir to allow clone to create it
+        if target_exists and is_empty:
+            try:
+                target.rmdir()
+            except OSError:
+                pass
+        result = subprocess.run(
+            [git, "clone", remote_url, str(target)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            return False, f"git clone failed: {result.stderr.strip() or result.stdout.strip()}"
+        return True, None
+    except subprocess.TimeoutExpired:
+        return False, "git clone timed out"
+    except Exception as e:
+        return False, str(e)
+
+
 def restore_backup(
     config: Config,
     output_dir: str,
@@ -24,6 +116,7 @@ def restore_backup(
     force: bool = False,
     decrypt: bool = True,
     decrypt_key_path: str | None = None,
+    with_github_clone: bool = False,
 ) -> dict[str, Any]:
     """Download non-pruned files from the Drive manifest snapshot.
 
@@ -235,6 +328,105 @@ def restore_backup(
         files_restored += 1
         bytes_restored += entry.size
 
+    # --- GitHub clone phase (greenfield: .git not in Drive) ---
+    git_repos_found = 0
+    git_cloned = 0
+    git_skipped_existing = 0
+    git_skipped_no_remote = 0
+    git_failed = 0
+    git_errors: list[dict[str, str]] = []
+    if with_github_clone:
+        # Load git_repos inventory from Drive _machine_state/git_repos.json
+        # Fallback to local backup_root/_machine_state/git_repos.json for testing.
+        repos: list[dict[str, Any]] = []
+        inventory_found = False
+        inventory_source = ""
+        # Try Drive
+        try:
+            # _machine_state folder under profile
+            ms_folder_id = drive.get_or_create_folder("_machine_state", root_id)
+            found_git = drive.find_file_by_name_and_parent("git_repos.json", ms_folder_id)
+            if found_git is not None:
+                fd, tmp_git_path = tempfile.mkstemp(suffix=".json")
+                os.close(fd)
+                try:
+                    drive.download_file(found_git["id"], tmp_git_path)
+                    with open(tmp_git_path, "r", encoding="utf-8") as f:
+                        envelope = json.load(f)
+                    # collector envelope is {schema_version, collector, collected_at, data}
+                    data = envelope.get("data") if isinstance(envelope, dict) and "data" in envelope else envelope
+                    if isinstance(data, dict) and "repos" in data:
+                        repos = list(data["repos"])
+                    elif isinstance(data, list):
+                        repos = list(data)
+                    inventory_found = True
+                    inventory_source = "drive:_machine_state/git_repos.json"
+                finally:
+                    try:
+                        os.unlink(tmp_git_path)
+                    except OSError:
+                        pass
+        except Exception as e:
+            logger.warning("Failed to load git_repos inventory from Drive: %s", e)
+        # Fallback local
+        if not inventory_found:
+            local_path = Path(config.backup_root) / "_machine_state" / "git_repos.json"
+            if local_path.is_file():
+                try:
+                    with open(local_path, "r", encoding="utf-8") as f:
+                        envelope = json.load(f)
+                    data = envelope.get("data") if isinstance(envelope, dict) and "data" in envelope else envelope
+                    if isinstance(data, dict) and "repos" in data:
+                        repos = list(data["repos"])
+                    inventory_found = True
+                    inventory_source = f"local:{local_path}"
+                except Exception as e:
+                    logger.warning("Failed to load local git_repos inventory %s: %s", local_path, e)
+        if not inventory_found:
+            msg = "git_repos inventory not found (no _machine_state/git_repos.json on Drive or locally)"
+            logger.warning(msg)
+            git_errors.append({"relative_path": "<git_repos.json>", "error": msg})
+        else:
+            logger.info("Git repos inventory from %s: %d repos", inventory_source, len(repos))
+            git_repos_found = len(repos)
+            for repo in repos:
+                rel = str(repo.get("relative_path", "")).strip()
+                remote_url = str(repo.get("remote_url", "")).strip()
+                has_github = bool(repo.get("has_github"))
+                has_remote = bool(repo.get("has_remote"))
+                if not rel or not _is_safe_relative_path(rel):
+                    git_failed += 1
+                    git_errors.append({"relative_path": rel or "<unknown>", "error": "unsafe path in git_repos inventory"})
+                    continue
+                if not has_github or not remote_url or "github.com" not in remote_url.lower():
+                    git_skipped_no_remote += 1
+                    logger.info("Skipping %s: no GitHub remote (%s)", rel, remote_url or "no remote")
+                    continue
+                target = Path(output_dir) / rel
+                if (target / ".git").exists():
+                    git_skipped_existing += 1
+                    continue
+                if dry_run:
+                    git_cloned += 1
+                    logger.info("[dry-run] Would clone %s -> %s", remote_url, target)
+                    continue
+                ok, err = _clone_or_init_git_repo(target, remote_url, dry_run=False)
+                if ok:
+                    git_cloned += 1
+                    logger.info("Cloned %s -> %s", remote_url, target)
+                else:
+                    git_failed += 1
+                    git_errors.append({"relative_path": rel, "error": err or "clone failed"})
+                    logger.warning("Clone failed for %s (%s): %s", rel, remote_url, err)
+        logger.info(
+            "Git clone phase: %d found, %d cloned, %d existing, %d no-remote skipped, %d failed",
+            git_repos_found,
+            git_cloned,
+            git_skipped_existing,
+            git_skipped_no_remote,
+            git_failed,
+        )
+
     logger.info(
         "Restore finished: %d restored, %d pruned skipped, %d existing skipped, "
         "%d failed",
@@ -255,4 +447,10 @@ def restore_backup(
         "bytes_restored": bytes_restored,
         "pruned_files": pruned_files,
         "errors": errors,
+        "git_repos_found": git_repos_found,
+        "git_cloned": git_cloned,
+        "git_skipped_existing": git_skipped_existing,
+        "git_skipped_no_remote": git_skipped_no_remote,
+        "git_failed": git_failed,
+        "git_errors": git_errors,
     }
