@@ -1,5 +1,5 @@
 # WSL home backup — run with: drive-backup --config config.wsl.yaml
-# Backs up /home/joesa (ext4 WSL disk) to Drive folder "Laptop Backups/Inspiron 15 3535-wsl"
+# Backs up /home/joesa (ext4 WSL disk) to Drive folder "Computer Backups/Inspiron 15 3535-wsl"
 # Separate from Windows profile "Inspiron 15 3535" (C:\Users\joesa)
 
 backup_root: "/home/joesa"
@@ -162,7 +162,7 @@ no_size_limit:
   - ".ogg"
 
 profile_name: "Inspiron 15 3535-wsl"
-drive_parent_folder_name: "Laptop Backups"
+drive_parent_folder_name: "Computer Backups"
 credentials_path: "credentials.json"
 manifest_path: "~/.drive-backup/profiles/Inspiron 15 3535-wsl/manifest.json"
 token_path: "~/.drive-backup/token.json"
