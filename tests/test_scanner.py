@@ -35,6 +35,20 @@ class TestScanner:
         assert "subdir/file2.txt" in paths
         assert all(not e.is_skipped for e in entries)
 
+    def test_dangling_symlink_is_skipped_not_an_error(self, tmp_path: Path) -> None:
+        (tmp_path / "SingletonLock").symlink_to(tmp_path / "missing-target")
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+        )
+
+        (entry,) = list(scan(config))
+
+        assert entry.is_skipped
+        assert entry.skip_reason == "symlink"
+
     def test_excludes_directories(self, tmp_path: Path) -> None:
         tmp = str(tmp_path)
         write_tree(

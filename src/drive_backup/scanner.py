@@ -201,13 +201,16 @@ def scan(config: Config) -> Iterator[FileEntry]:
             try:
                 stat = os.stat(full_path)
             except (PermissionError, OSError) as e:
+                # A dangling symlink (app lock files like SingletonLock) fails
+                # stat but would be skipped anyway; don't report it as an error.
+                dangling = config.exclude_symlinks and os.path.islink(full_path)
                 yield FileEntry(
                     path=full_path,
                     relative_path=rel_path,
                     size=0,
                     mtime=0,
                     is_skipped=True,
-                    skip_reason=f"error: {e}",
+                    skip_reason="symlink" if dangling else f"error: {e}",
                 )
                 continue
 
