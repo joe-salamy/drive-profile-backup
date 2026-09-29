@@ -4,11 +4,13 @@
 # Each machine keeps its own default via $DRIVE_BACKUP_CONFIG or a local
 # config.yaml, so tracked code stays identical on every laptop/PC.
 #
-# Profile "Inspiron 15 3535-linux" backs up /home/joesa (ext4, Linux Mint) to
-# Drive folder "Computer Backups/Inspiron 15 3535-linux", alongside the frozen
-# archives "Inspiron 15 3535" (Windows NTFS) and "Inspiron 15 3535-wsl".
-# NEVER run --prune/--prune-trash with an old profile from this machine —
-# every Windows-only file would look stale and trash the archive.
+# Profile "inspiron-3535" backs up /home/joesa (ext4, Linux Mint) into the
+# same Drive folder the Windows install used, "Computer Backups/inspiron-3535".
+# Relative paths line up (checked 2026-09-28: 7,827 files / 8.9 GB byte-
+# identical), so the first run seeds from the Drive manifest snapshot and
+# skips them by MD5. The folder also keeps ~31k Windows-only files.
+# NEVER run --prune/--prune-trash on this profile: every Windows-only file
+# would look stale and be trashed.
 
 # Blank means the current user's home directory (/home/joesa here).
 backup_root: ""
@@ -195,13 +197,12 @@ machine_state_collectors:
   - "developer_tools"
   - "git_repos"
 
-# Google Drive settings. New machine name keeps this backup separate from the
-# frozen "Inspiron 15 3535" and "Inspiron 15 3535-wsl" archives under one account.
-profile_name: "Inspiron 15 3535-linux"
+# Google Drive settings (folder names follow the device names in computer-info).
+profile_name: "inspiron-3535"
 drive_parent_folder_name: "Computer Backups"
 
 # Where to store local state. No manifest_path is set on purpose: it
-# auto-derives to ~/.drive-backup/profiles/Inspiron 15 3535-linux/manifest.json.
+# auto-derives to ~/.drive-backup/profiles/inspiron-3535/manifest.json.
 # The secrets key at ~/.drive-backup/secrets.key is reused from Windows —
 # without it, old *.enc archives cannot be decrypted.
 credentials_path: "credentials.json"

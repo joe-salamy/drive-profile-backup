@@ -3,8 +3,8 @@
 # Run nightly by scheduled/omen-nightly.sh (systemd user timer, see
 # scheduled/README.md).
 #
-# Profile "OMEN MAX 45L" backs up /home/joesa to Drive folder
-# "Computer Backups/OMEN MAX 45L". Mostly ~/Code: tracked files are also on
+# Profile "omen" backs up /home/joesa to Drive folder
+# "Computer Backups/omen". Mostly ~/Code: tracked files are also on
 # GitHub, but they're cheap to keep and this copy covers unpushed commits and
 # gitignored-but-precious files (localfin-ai data, shelf/, config.py, ...).
 
@@ -194,11 +194,11 @@ machine_state_collectors:
   - "git_repos"
 
 # Google Drive settings.
-profile_name: "OMEN MAX 45L"
+profile_name: "omen"
 drive_parent_folder_name: "Computer Backups"
 
 # Where to store local state. No manifest_path is set on purpose: it
-# auto-derives to ~/.drive-backup/profiles/OMEN MAX 45L/manifest.json.
+# auto-derives to ~/.drive-backup/profiles/omen/manifest.json.
 # token.json and secrets.key are copied from the 3535 (same OAuth client, same
 # key on every machine so any *.enc file can be decrypted with it).
 credentials_path: "credentials.json"
