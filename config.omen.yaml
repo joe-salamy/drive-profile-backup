@@ -29,7 +29,7 @@ exclude_dirs:
   - ".webpack" # Webpack cache
   - ".docusaurus" # Docusaurus generated cache/build state
   - ".sass-cache" # Sass compiler cache
-  - ".local" # Pruned wholesale (flatpak GBs, Trash); precious subtrees re-included below
+  - ".local" # Still walked because of the .local/bin include; the .local/* path patterns below prune the rest
   - "dist" # Built frontend/package output from Code repos
   - "build" # Generated build artifacts from Code repos
   - "coverage" # Test coverage output
@@ -69,7 +69,7 @@ exclude_dirs:
   - ".tmp-pytest-clean" # Generated pytest cleanup state
   - ".ssh" # Private keys — walked only to upload encrypted (see secrets note below)
   - ".azure" # Cached Azure credentials and tool state — encrypted, never plain
-  - ".cisco" # Generated VPN logs
+  - ".cisco" # Built-in secrets dir: still uploaded encrypted despite this entry
   - "snap" # Snap package revisions — re-downloaded by snapd
   - "node24" # 205M standalone Node — re-downloadable
   - ".grip" # 2.4M grip cache — re-downloadable
@@ -105,6 +105,12 @@ exclude_files:
   - "*.pfx"
   - ".boto" # Cloud credentials and client configuration
   - ".claude.json*" # Generated Claude account and project state
+  - ".credentials.json" # Claude Code OAuth tokens
+  - ".npmrc" # npm auth tokens
+  - ".netrc"
+  - ".git-credentials"
+  - ".pypirc"
+  # Also encrypted: everything under .ssh, .azure, .cisco, gh (GitHub CLI token), .gnupg.
   - ".lesshst" # Interactive command history
   - ".node_repl_history" # Interactive command history
   - "*(MERGED, BAD).*" # Known-bad generated lecture copies across formats
@@ -117,6 +123,8 @@ exclude_path_patterns:
   - ".local/share/**" # app data (flatpak, Steam, Trash, caches) — exceptions re-included below
   - ".local/go/*" # Go toolchain — re-downloadable
   - ".local/opt/*" # Locally built tools (llama.cpp) — rebuildable
+  - ".local/state/**" # Pagers, audio and scheduler state/logs
+  - ".atuin/bin/*" # atuin binary — re-downloadable
   - "*/harness-info/*.html" # Generated OMP reports and overviews
   - ".omp/*" # Keep OMP runtime state excluded except included session JSONL
   - ".var/app/*/cache/*" # Flatpak per-app caches
@@ -128,18 +136,16 @@ exclude_path_patterns:
   - "Code/localfin-ai/data/budget.db*" # live WAL database; omen-nightly.sh snapshots it to _snapshots/
 
 # Explicitly preserved paths inside otherwise-excluded trees (.omp, .local).
+# "*" also matches "/", so "dir/*.ext" matches at any depth below dir.
+# Code/**/.omp is not excluded at all; only the top-level ~/.omp is.
 include_path_patterns:
-  - ".omp/agent/sessions/*.jsonl"
-  - ".omp/agent/sessions/**/*.jsonl"
-  - ".omp/*.md"                  # top-level .omp docs (HISTORY-*.md)
-  - ".omp/*.py"                  # top-level .omp scripts (rename-agent-*.py)
-  - ".omp/*.txt"                 # top-level .omp text (HISTORY-MIGRATED-TO-WSL.txt)
-  - ".omp/agent/config.yml"      # harness config
-  - ".omp/scripts/**"            # requested: future/top-level scripts
-  # Repo harness substantive state — all Code/**/.omp now walked ( .omp removed from exclude_dirs );
-  # top-level .omp/* still excludes binaries, but Code/**/.omp/** is included by default (no extra pattern needed).
-  # Explicitly listing one repo for documentation; other Code repos covered automatically.
-  - "Code/drive-profile-backup/.omp/**"
+  - ".omp/agent/sessions/*.jsonl" # Session transcripts, any depth
+  - ".omp/agent/sessions/*.md" # Subagent outputs saved beside the transcripts
+  - ".omp/agent/memories/**" # Agent memories and rollout summaries
+  - ".omp/agent/config.yml" # Harness config
+  - ".omp/HISTORY*" # Top-level history docs (HISTORY-*.md, HISTORY-*.txt)
+  - ".omp/rename-agent-*.py" # Top-level helper scripts
+  - ".omp/scripts/**" # Requested: future scripts
   - ".local/bin/**" # User scripts — re-included through the pruned .local tree
   - ".local/share/applications/**" # Custom .desktop entries
 
@@ -182,6 +188,7 @@ no_size_limit:
   - ".flac"
   - ".aac"
   - ".ogg"
+  - ".m4a"
 
 # Generated machine-state inventories refreshed before each backup.
 # Windows-only collectors (system, windows_apps, windows_features, services,

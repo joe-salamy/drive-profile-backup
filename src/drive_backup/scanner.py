@@ -57,6 +57,11 @@ SECRETS_FILE_PATTERNS: list[str] = [
     "*.pfx",
     ".boto",
     ".claude.json*",
+    ".credentials.json",  # Claude Code OAuth tokens
+    ".npmrc",  # npm registry auth tokens
+    ".netrc",
+    ".git-credentials",
+    ".pypirc",
 ]
 
 SECRETS_DIR_NAMES: set[str] = {
@@ -66,6 +71,8 @@ SECRETS_DIR_NAMES: set[str] = {
     ".android",
     ".aitk",
     ".cisco",
+    "gh",  # GitHub CLI: hosts.yml holds the OAuth token
+    ".gnupg",
 }
 
 
@@ -97,6 +104,34 @@ def _has_included_descendant(rel_dir: str, patterns: list[str]) -> bool:
     return any(
         fnmatch(rel_dir, pattern) or pattern.startswith(prefix) for pattern in patterns
     )
+
+
+def _literal_prefix(pattern: str) -> str:
+    """Return the part of a wildcard pattern before its first wildcard."""
+    for i, ch in enumerate(pattern):
+        if ch in "*?[":
+            return pattern[:i]
+    return pattern
+
+
+def _is_excluded_subtree(rel_dir: str, config: Config) -> bool:
+    """Check if a path pattern excludes everything below a directory.
+
+    fnmatch's "*" also matches "/", so a pattern ending in "*" that matches
+    "rel_dir/" matches every path below it. The walk can then skip the whole
+    tree, unless an include pattern might reach into it.
+    """
+    probe = f"{rel_dir}/"
+    if not any(
+        pattern.endswith("*") and fnmatch(probe, pattern)
+        for pattern in config.exclude_path_patterns
+    ):
+        return False
+    for pattern in config.include_path_patterns:
+        literal = _literal_prefix(pattern)
+        if literal.startswith(probe) or probe.startswith(literal):
+            return False
+    return True
 
 
 def _relative_path(path: str, root: str) -> str:
@@ -180,6 +215,15 @@ def scan(config: Config) -> Iterator[FileEntry]:
                     continue
                 excluded_dir_count += 1
                 logger.debug("Skipping excluded dir: %s", full_dir)
+                continue
+
+            # Skip trees an exclude_path_pattern covers entirely, so secrets
+            # inside them (test keys, CA bundles) are not encrypted and uploaded.
+            if _is_excluded_subtree(rel_dir, config) and not (
+                config.encrypt_secrets and _is_secret_dir(d)
+            ):
+                excluded_dir_count += 1
+                logger.debug("Skipping excluded tree: %s", full_dir)
                 continue
 
             filtered_dirs.append(d)

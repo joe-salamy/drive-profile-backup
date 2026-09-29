@@ -430,3 +430,76 @@ class TestScanner:
         entries = list(scan(config))
 
         assert entries[0].relative_path == long_name
+
+    def test_credential_files_are_encrypted(self, tmp_path: Path) -> None:
+        write_tree(
+            tmp_path,
+            {
+                ".claude/.credentials.json": "{}",
+                ".config/gh/hosts.yml": "oauth_token: x",
+                "Code/app/.npmrc": "//registry/:_authToken=x",
+                "Code/app/notes.md": "plain",
+            },
+        )
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[".npmrc"],
+        )
+
+        encrypted = {e.relative_path: e.encrypted for e in scan(config)}
+
+        assert encrypted == {
+            ".claude/.credentials.json": True,
+            ".config/gh/hosts.yml": True,
+            "Code/app/.npmrc": True,
+            "Code/app/notes.md": False,
+        }
+
+    def test_excluded_subtree_is_not_walked_even_for_secrets(
+        self, tmp_path: Path
+    ) -> None:
+        write_tree(
+            tmp_path,
+            {
+                "go/src/crypto/testdata/test.key": "k",
+                ".local/share/uv/cacert.pem": "c",
+                ".local/share/applications/app.desktop": "d",
+                ".omp/agent/sessions/s1/run.jsonl": "{}",
+                ".omp/cache/blob.pem": "c",
+            },
+        )
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            exclude_path_patterns=["go/*", ".local/share/**", ".omp/*"],
+            include_path_patterns=[
+                ".local/share/applications/**",
+                ".omp/agent/sessions/*.jsonl",
+            ],
+        )
+
+        paths = {e.relative_path for e in scan(config)}
+
+        assert paths == {
+            ".local/share/applications/app.desktop",
+            ".omp/agent/sessions/s1/run.jsonl",
+        }
+
+    def test_secret_dir_survives_subtree_exclusion(self, tmp_path: Path) -> None:
+        write_tree(tmp_path, {".ssh/id_ed25519": "k"})
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            exclude_path_patterns=[".ssh/*"],
+        )
+
+        (entry,) = list(scan(config))
+
+        assert entry.relative_path == ".ssh/id_ed25519"
+        assert entry.encrypted
