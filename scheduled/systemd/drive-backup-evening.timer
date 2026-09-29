@@ -1,0 +1,10 @@
+[Unit]
+Description=Check every 5 minutes whether the 3535 can run its evening drive-backup
+
+[Timer]
+# All day, so laptop-gate.sh can measure how long the laptop has been on AC.
+OnCalendar=*:0/5
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

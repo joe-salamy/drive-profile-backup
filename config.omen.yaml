@@ -1,14 +1,12 @@
-# Native Linux backup — copy to config.yaml (gitignored) or select with:
-#   drive-backup --config config.linux.yaml
-#   DRIVE_BACKUP_CONFIG=config.linux.yaml drive-backup
-# Each machine keeps its own default via $DRIVE_BACKUP_CONFIG or a local
-# config.yaml, so tracked code stays identical on every laptop/PC.
+# OMEN (Ubuntu Server, headless) — select with:
+#   drive-backup --config config.omen.yaml
+# Run nightly by scheduled/omen-nightly.sh (systemd user timer, see
+# scheduled/README.md).
 #
-# Profile "Inspiron 15 3535-linux" backs up /home/joesa (ext4, Linux Mint) to
-# Drive folder "Computer Backups/Inspiron 15 3535-linux", alongside the frozen
-# archives "Inspiron 15 3535" (Windows NTFS) and "Inspiron 15 3535-wsl".
-# NEVER run --prune/--prune-trash with an old profile from this machine —
-# every Windows-only file would look stale and trash the archive.
+# Profile "OMEN MAX 45L" backs up /home/joesa to Drive folder
+# "Computer Backups/OMEN MAX 45L". Mostly ~/Code: tracked files are also on
+# GitHub, but they're cheap to keep and this copy covers unpushed commits and
+# gitignored-but-precious files (localfin-ai data, shelf/, config.py, ...).
 
 # Blank means the current user's home directory (/home/joesa here).
 backup_root: ""
@@ -123,11 +121,11 @@ exclude_path_patterns:
   - ".omp/*" # Keep OMP runtime state excluded except included session JSONL
   - ".var/app/*/cache/*" # Flatpak per-app caches
   - ".config/google-chrome-for-testing/*" # 42M browser cache — re-downloadable
-  - ".config/discord/*" # 666M Electron cache — re-downloadable
-  - ".mozilla/firefox/*/storage/*" # 384M site storage; bookmarks/history (places.sqlite) kept
-  - "restore/*" # 11G restored Windows/WSL archives — already on Drive
-  - "opt/*" # REAPER/DecentSampler installs — re-downloadable
   - "go/*" # Go module cache and built binaries (go install)
+  - "models/*" # 36G LLM weights — re-downloadable (see computer-info models/)
+  - "Documents/*" # oln working-set mirror; the 3535 is the source of truth
+  - "Downloads/*" # filemorph/oln exchange mirror; the 3535 is the source of truth
+  - "Code/localfin-ai/data/budget.db*" # live WAL database; omen-nightly.sh snapshots it to _snapshots/
 
 # Explicitly preserved paths inside otherwise-excluded trees (.omp, .local).
 include_path_patterns:
@@ -195,15 +193,14 @@ machine_state_collectors:
   - "developer_tools"
   - "git_repos"
 
-# Google Drive settings. New machine name keeps this backup separate from the
-# frozen "Inspiron 15 3535" and "Inspiron 15 3535-wsl" archives under one account.
-profile_name: "Inspiron 15 3535-linux"
+# Google Drive settings.
+profile_name: "OMEN MAX 45L"
 drive_parent_folder_name: "Computer Backups"
 
 # Where to store local state. No manifest_path is set on purpose: it
-# auto-derives to ~/.drive-backup/profiles/Inspiron 15 3535-linux/manifest.json.
-# The secrets key at ~/.drive-backup/secrets.key is reused from Windows —
-# without it, old *.enc archives cannot be decrypted.
+# auto-derives to ~/.drive-backup/profiles/OMEN MAX 45L/manifest.json.
+# token.json and secrets.key are copied from the 3535 (same OAuth client, same
+# key on every machine so any *.enc file can be decrypted with it).
 credentials_path: "credentials.json"
 token_path: "~/.drive-backup/token.json"
 

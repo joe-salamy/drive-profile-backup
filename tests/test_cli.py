@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import sys
 import types
 from collections.abc import Callable
@@ -590,3 +592,87 @@ def test_print_summary_includes_machine_state_counts_and_warnings() -> None:
     assert "1 succeeded, 1 partial, 1 failed" in output
     assert "wsl: one distro failed" in output
     assert "services: access denied" in output
+
+
+def _run_main_with_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run: Callable[[], BackupReport],
+) -> None:
+    config = Config(
+        profile_name="laptop-a",
+        backup_root=str(tmp_path),
+        exclude_dirs=[],
+        exclude_files=[],
+        manifest_path=str(tmp_path / "manifest.json"),
+    )
+
+    class FakeBackupEngine:
+        def __init__(self, config: Config, **kwargs: object) -> None:
+            pass
+
+        def run(
+            self,
+            *,
+            progress_callback: Callable[[object, ProgressEvent], None],
+        ) -> BackupReport:
+            return run()
+
+    monkeypatch.setattr("drive_backup.config.load_config", lambda path: config)
+    monkeypatch.setattr("drive_backup.engine.BackupEngine", FakeBackupEngine)
+    main(["--skip-machine-state"])
+
+
+class TestExitStatus:
+    def test_clean_run_exits_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main_with_engine(tmp_path, monkeypatch, lambda: _minimal_report())
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"files_skipped_error": 3}, "3 files failed"),
+            ({"files_prune_failed": 2}, "2 prune operations failed"),
+            ({"manifest_snapshot_error": "quota"}, "manifest snapshot failed: quota"),
+        ],
+    )
+    def test_run_with_errors_exits_two(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        overrides: dict[str, object],
+        message: str,
+    ) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            _run_main_with_engine(
+                tmp_path, monkeypatch, lambda: _minimal_report(**overrides)
+            )
+
+        assert excinfo.value.code == 2
+        assert message in capsys.readouterr().out
+
+    def test_sigterm_exits_143(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def run() -> BackupReport:
+            os.kill(os.getpid(), signal.SIGTERM)
+            raise AssertionError("SIGTERM handler did not interrupt the run")
+
+        with pytest.raises(SystemExit) as excinfo:
+            _run_main_with_engine(tmp_path, monkeypatch, run)
+
+        assert excinfo.value.code == 143
+        assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+
+    def test_ctrl_c_exits_130(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def run() -> BackupReport:
+            raise KeyboardInterrupt
+
+        with pytest.raises(SystemExit) as excinfo:
+            _run_main_with_engine(tmp_path, monkeypatch, run)
+
+        assert excinfo.value.code == 130

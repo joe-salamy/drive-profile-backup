@@ -75,6 +75,17 @@ Machine-state outputs intentionally contain unredacted diagnostics. Environment 
 
 Files upload under `drive_parent_folder_name/profile_name/` and reports go under that Drive profile folder's `_reports` folder. Local profile-mode state defaults to `~/.drive-backup/profiles/<profile_name>/manifest.json` unless `manifest_path` is set.
 
+## Scheduled runs
+
+`scheduled/` holds systemd user timers for unattended backups (OMEN nightly,
+the 3535 in the evening once it has been on AC for 30 minutes), with repo
+"unpushed work" reminders and failure reports sent to joe-inbox. See
+`scheduled/README.md`; install per host with `scheduled/install.sh`.
+
+Exit codes: `0` success, `1` fatal error, `2` finished with file, prune, or
+manifest-snapshot errors, `130` Ctrl+C, `143` SIGTERM (progress is
+checkpointed in both cases).
+
 ## Summary reports
 
 ```powershell

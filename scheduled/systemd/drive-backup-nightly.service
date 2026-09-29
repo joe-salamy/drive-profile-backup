@@ -1,0 +1,12 @@
+[Unit]
+Description=drive-backup nightly run (OMEN): repo reminder + Google Drive backup
+Documentation=file://%h/Code/drive-profile-backup/scheduled/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Code/drive-profile-backup
+ExecStart=%h/Code/drive-profile-backup/scheduled/omen-nightly.sh
+Nice=10
+IOSchedulingClass=idle
+# SIGTERM makes drive-backup checkpoint; in-flight uploads get this long.
+TimeoutStopSec=45

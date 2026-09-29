@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 import sys
+from types import FrameType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -14,6 +16,31 @@ if TYPE_CHECKING:
     from drive_backup.engine import ProgressEvent
     from drive_backup.report import BackupReport
     from drive_backup.scanner import FileEntry
+
+# Exit codes for unattended runs (systemd timers treat non-zero as failure).
+EXIT_COMPLETED_WITH_ERRORS = 2
+EXIT_INTERRUPTED = 130  # Ctrl+C
+EXIT_TERMINATED = 143  # SIGTERM, e.g. shutdown while a timer run is active
+
+
+class _Terminated(KeyboardInterrupt):
+    """SIGTERM, raised as KeyboardInterrupt so the engine's checkpoint path runs."""
+
+
+def _raise_terminated(signum: int, frame: FrameType | None) -> None:
+    raise _Terminated
+
+
+def run_errors(report: BackupReport) -> list[str]:
+    """Describe failures that make a finished run exit non-zero."""
+    errors = []
+    if report["files_skipped_error"]:
+        errors.append(f"{report['files_skipped_error']} files failed")
+    if report.get("files_prune_failed", 0):
+        errors.append(f"{report['files_prune_failed']} prune operations failed")
+    if report.get("manifest_snapshot_error"):
+        errors.append(f"manifest snapshot failed: {report['manifest_snapshot_error']}")
+    return errors
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -339,6 +366,8 @@ def main(argv: list[str] | None = None) -> None:
         elif args.verbose and event.kind is ProgressKind.SKIPPED:
             console.print(f"  [SKIP] {file.relative_path} — {file.skip_reason}")
 
+    # A shutdown sends SIGTERM; treat it like Ctrl+C so progress is checkpointed.
+    signal.signal(signal.SIGTERM, _raise_terminated)
     try:
         with progress:
             scan_task = progress.add_task(
@@ -349,10 +378,25 @@ def main(argv: list[str] | None = None) -> None:
     except ManifestLoadError as error:
         console.print(f"[red]Backup failed:[/] {error}")
         raise SystemExit(1) from error
+    except KeyboardInterrupt as interrupt:
+        terminated = isinstance(interrupt, _Terminated)
+        console.print(
+            f"[yellow]Backup {'terminated' if terminated else 'interrupted'}; "
+            "progress was checkpointed and the next run resumes.[/]"
+        )
+        raise SystemExit(
+            EXIT_TERMINATED if terminated else EXIT_INTERRUPTED
+        ) from interrupt
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
     # Print summary
     console.print()
     _print_summary(console, report, verbose=args.verbose)
+    errors = run_errors(report)
+    if errors:
+        console.print(f"[red]Backup completed with errors:[/] {'; '.join(errors)}")
+        raise SystemExit(EXIT_COMPLETED_WITH_ERRORS)
 
 
 def _print_summary(

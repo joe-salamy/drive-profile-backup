@@ -1,0 +1,17 @@
+[Unit]
+Description=drive-backup evening run (3535): repo reminder + Google Drive backup
+Documentation=file://%h/Code/drive-profile-backup/scheduled/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Code/drive-profile-backup
+# Exit 1 = conditions not met: the run is skipped, not failed.
+ExecCondition=%h/Code/drive-profile-backup/scheduled/laptop-gate.sh
+ExecStart=%h/Code/drive-profile-backup/scheduled/laptop-evening.sh
+Nice=15
+IOSchedulingClass=idle
+# Keep hashing from heating the laptop: at most 2 of 16 threads.
+CPUQuota=200%
+# Lid close shuts down: SIGTERM makes drive-backup checkpoint; don't hold
+# the shutdown long for in-flight uploads (the next run reconciles them).
+TimeoutStopSec=30
