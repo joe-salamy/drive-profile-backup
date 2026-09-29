@@ -676,3 +676,18 @@ class TestExitStatus:
             _run_main_with_engine(tmp_path, monkeypatch, run)
 
         assert excinfo.value.code == 130
+
+
+def test_print_summary_lists_failed_files() -> None:
+    from rich.console import Console
+
+    console = Console(record=True, width=200)
+    report = _minimal_report(
+        error_files=[
+            {"path": "/h/a[1].txt", "relative_path": "a[1].txt", "error": "boom"}
+        ]
+    )
+
+    _print_summary(console, report)
+
+    assert "a[1].txt: boom" in console.export_text()

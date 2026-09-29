@@ -541,7 +541,14 @@ def _print_summary(
 
     errors = report.get("error_files", [])
     if errors:
-        console.print(f"\n[red]{len(errors)} files had errors.[/]")
+        console.print(f"\n[red]{len(errors)} files had errors:[/]")
+        for error_file in errors[:20]:
+            console.print(
+                f"  {error_file['relative_path']}: {error_file['error']}",
+                markup=False,
+            )
+        if len(errors) > 20:
+            console.print(f"  ... and {len(errors) - 20} more (see the JSON report)")
 
 
 if __name__ == "__main__":

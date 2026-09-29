@@ -1,5 +1,6 @@
 """Tests for the filesystem scanner."""
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,20 @@ class TestScanner:
 
         assert entry.is_skipped
         assert entry.skip_reason == "symlink"
+
+    def test_fifo_is_skipped_not_opened(self, tmp_path: Path) -> None:
+        os.mkfifo(tmp_path / "brain.sock")
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+        )
+
+        (entry,) = list(scan(config))
+
+        assert entry.is_skipped
+        assert entry.skip_reason == "not_regular_file"
 
     def test_excludes_directories(self, tmp_path: Path) -> None:
         tmp = str(tmp_path)

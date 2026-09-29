@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
+from stat import S_ISREG
 from typing import Iterator
 
 from drive_backup.config import Config
@@ -216,6 +217,19 @@ def scan(config: Config) -> Iterator[FileEntry]:
 
             size = stat.st_size
             mtime = stat.st_mtime
+
+            # Sockets, FIFOs and devices have no content to upload (and
+            # opening a FIFO would block).
+            if not S_ISREG(stat.st_mode):
+                yield FileEntry(
+                    path=full_path,
+                    relative_path=rel_path,
+                    size=0,
+                    mtime=mtime,
+                    is_skipped=True,
+                    skip_reason="not_regular_file",
+                )
+                continue
 
             # Always skip the local state directory, even if dir filtering missed it
             # (covers edge where .drive-backup is nested or not pruned).
