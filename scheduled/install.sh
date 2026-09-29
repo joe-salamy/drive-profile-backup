@@ -20,8 +20,13 @@ for f in token.json secrets.key; do
 done
 
 if [[ ! -x $REPO/.venv/bin/drive-backup ]]; then
-  uv venv --quiet "$REPO/.venv"
-  uv pip install --quiet --python "$REPO/.venv/bin/python" -e "$REPO"
+  if command -v uv >/dev/null; then
+    uv venv --quiet "$REPO/.venv"
+    uv pip install --quiet --python "$REPO/.venv/bin/python" -e "$REPO"
+  else
+    python3 -m venv "$REPO/.venv"
+    "$REPO/.venv/bin/pip" install --quiet -e "$REPO"
+  fi
 fi
 
 mkdir -p "$STATE_DIR"
