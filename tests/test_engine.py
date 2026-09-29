@@ -23,6 +23,14 @@ from drive_backup.scanner import FileEntry
 from tests.file_helpers import write_tree
 
 
+class _FakeHttpError(Exception):
+    """Stand-in for googleapiclient's HttpError: only resp.status matters."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"HTTP {status}")
+        self.resp = MagicMock(status=status)
+
+
 class TestFormatMtime:
     def test_zero_returns_empty(self) -> None:
         assert _format_mtime(0) == ""
@@ -703,6 +711,78 @@ class TestBackupEngineUploadErrors:
         assert "lookup failed" in engine.stats.error_files[0].error
         mock_drive.upload_file.assert_not_called()
         assert Manifest.load(str(tmp_path / "manifest.json")).get("file.txt") is None
+
+    @staticmethod
+    def _engine_with_stale_drive_id(
+        tmp_path: Path, update_error: Exception
+    ) -> tuple[BackupEngine, MagicMock, FileEntry]:
+        file_path = tmp_path / "file.txt"
+        file_path.write_text("hello", encoding="utf-8")
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
+        engine = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        )
+        engine.manifest.set(
+            relative_path="file.txt",
+            md5="stale",
+            size=1,
+            mtime=0.0,
+            drive_file_id="deleted_id",
+            drive_parent_id="root_id",
+        )
+        mock_drive = MagicMock()
+        mock_drive.update_file.side_effect = update_error
+        mock_drive.find_file_by_name_and_parent.return_value = None
+        mock_drive.upload_file.return_value = {
+            "id": "new_id",
+            "md5Checksum": compute_md5(str(file_path)),
+        }
+        engine.drive = mock_drive
+        engine._root_folder_id = "root_id"
+        stat = file_path.stat()
+        entry = FileEntry(
+            path=str(file_path),
+            relative_path="file.txt",
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+        )
+        return engine, mock_drive, entry
+
+    def test_deleted_drive_file_is_uploaded_again(self, tmp_path: Path) -> None:
+        engine, mock_drive, entry = self._engine_with_stale_drive_id(
+            tmp_path, _FakeHttpError(404)
+        )
+
+        engine._process_file(entry)
+
+        assert engine.stats.files_skipped_error == 0
+        mock_drive.update_file.assert_called_once_with(
+            "deleted_id", entry.path, resumable=False
+        )
+        mock_drive.upload_file.assert_called_once_with(
+            entry.path, "root_id", resumable=False
+        )
+        persisted = Manifest.load(str(tmp_path / "manifest.json")).get("file.txt")
+        assert persisted is not None
+        assert persisted.drive_file_id == "new_id"
+
+    def test_other_update_errors_are_not_retried_as_uploads(
+        self, tmp_path: Path
+    ) -> None:
+        engine, mock_drive, entry = self._engine_with_stale_drive_id(
+            tmp_path, _FakeHttpError(403)
+        )
+
+        engine._process_file(entry)
+
+        assert engine.stats.files_skipped_error == 1
+        mock_drive.upload_file.assert_not_called()
 
     def test_successful_prune_removal_persists_immediately(
         self, tmp_path: Path

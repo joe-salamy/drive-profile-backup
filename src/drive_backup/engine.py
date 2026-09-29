@@ -12,7 +12,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from drive_backup.config import Config
 from drive_backup.dedup import Manifest, ManifestEntry, compute_md5, needs_upload
@@ -54,6 +54,11 @@ class ProgressKind(StrEnum):
 class ProgressEvent:
     kind: ProgressKind
     reason: str = ""
+
+
+def _is_not_found_error(error: BaseException) -> bool:
+    """Return whether an exception is a Drive 404 (file deleted since recorded)."""
+    return getattr(getattr(error, "resp", None), "status", None) == 404
 
 
 class ManifestProgressError(RuntimeError):
@@ -847,6 +852,36 @@ class BackupEngine:
             is_encrypted=is_encrypted,
         )
 
+    def _put_file(
+        self,
+        local_path: str,
+        parent_id: str,
+        existing_drive_file_id: str | None,
+        resumable: bool,
+    ) -> dict[str, Any]:
+        """Update the known Drive file, reconcile a same-name orphan, or upload new."""
+        assert self.drive is not None
+        if existing_drive_file_id:
+            try:
+                return self.drive.update_file(
+                    existing_drive_file_id, local_path, resumable=resumable
+                )
+            except Exception as exc:
+                if not _is_not_found_error(exc):
+                    raise
+                # Deleted on Drive after the manifest recorded it; re-create.
+                logger.warning(
+                    "Drive file %s for %s no longer exists; uploading a new copy",
+                    existing_drive_file_id,
+                    local_path,
+                )
+        found = self.drive.find_file_by_name_and_parent(
+            os.path.basename(local_path), parent_id
+        )
+        if found is not None:
+            return self.drive.update_file(found["id"], local_path, resumable=resumable)
+        return self.drive.upload_file(local_path, parent_id, resumable=resumable)
+
     def _execute_upload(self, work: UploadWork) -> UploadResult:
         """Perform folder resolution and Drive I/O for a single file."""
         assert self.drive is not None
@@ -882,20 +917,9 @@ class BackupEngine:
 
                 crypto.encrypt_file(plaintext_path, enc_path, self._secrets_key)
                 resumable = os.path.getsize(enc_path) > self.config.resumable_threshold_bytes
-                if work.existing_drive_file_id:
-                    result = self.drive.update_file(
-                        work.existing_drive_file_id, enc_path, resumable=resumable
-                    )
-                else:
-                    found = self.drive.find_file_by_name_and_parent(filename_enc, parent_id)
-                    if found is not None:
-                        result = self.drive.update_file(
-                            found["id"], enc_path, resumable=resumable
-                        )
-                    else:
-                        result = self.drive.upload_file(
-                            enc_path, parent_id, resumable=resumable
-                        )
+                result = self._put_file(
+                    enc_path, parent_id, work.existing_drive_file_id, resumable
+                )
                 # Use plaintext MD5 for manifest dedup (Drive md5 is ciphertext)
                 md5_plain = compute_md5(plaintext_path) or ""
                 drive_file_id = str(result.get("id", ""))
@@ -927,22 +951,9 @@ class BackupEngine:
 
         resumable = file.size > self.config.resumable_threshold_bytes
 
-        # Update existing file, reconcile an orphaned same-name file, or upload new one
-        if work.existing_drive_file_id:
-            result = self.drive.update_file(
-                work.existing_drive_file_id, file.path, resumable=resumable
-            )
-        else:
-            filename = os.path.basename(file.path)
-            found = self.drive.find_file_by_name_and_parent(filename, parent_id)
-            if found is not None:
-                result = self.drive.update_file(
-                    found["id"], file.path, resumable=resumable
-                )
-            else:
-                result = self.drive.upload_file(
-                    file.path, parent_id, resumable=resumable
-                )
+        result = self._put_file(
+            file.path, parent_id, work.existing_drive_file_id, resumable
+        )
 
         md5 = result.get("md5Checksum", "")
         drive_file_id = str(result.get("id", ""))
