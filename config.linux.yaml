@@ -78,6 +78,15 @@ exclude_dirs:
   - "node24" # 205M standalone Node — re-downloadable
   - ".grip" # 2.4M grip cache — re-downloadable
   - ".npm-global" # 444K npm global prefix — re-downloadable
+  - "restore" # Restored Windows/WSL archives — already on Drive; pruned so its 18k files aren't walked
+  # Chromium/Electron caches (Termius, Slack, Bitwarden). Names are case-sensitive,
+  # so "cache" above does not catch these.
+  - "Cache"
+  - "Code Cache"
+  - "GPUCache"
+  - "DawnGraphiteCache"
+  - "DawnWebGPUCache"
+  - "Service Worker"
 
 # File name patterns to exclude (supports wildcards).
 # Secret patterns (.env, *.pem, *.key, credentials.json, ...) are ENCRYPTED
@@ -114,6 +123,29 @@ exclude_files:
   - "*(MERGED, BAD).*" # Known-bad generated lecture copies across formats
   - "TEST *.m4a" # Generated lecture test encodes
   - "*TRIM TEST*.m4a" # Generated lecture trim-test copies
+  - "*__preprocessed.wav" # open-law-notes intermediates, rebuilt from the kept source recordings
+  # Credentials the scanner does not encrypt — skipped so they never reach Drive in plaintext.
+  - ".credentials.json" # Claude Code OAuth tokens
+  - ".npmrc" # npm auth token
+  - ".Xauthority" # X session cookie
+  - "Cookies" # Chromium/Electron session cookies
+  - "Cookies-journal"
+  - "Trust Tokens"
+  - "Trust Tokens-journal"
+  - "cookies.sqlite*" # Firefox session cookies
+  - "key4.db" # NSS key store; with logins.json it unlocks saved passwords
+  - "logins*" # Firefox saved passwords (logins.json, logins.db, logins-backup.json)
+  - "*.keyring" # GNOME keyring files
+  # Noise. These are file-name rules because include_path_patterns (.local/bin/**)
+  # override path exclusions but not file-name exclusions.
+  - "chezmoi" # 39M binary in .local/bin — re-downloadable
+  - "mdv" # 39M binary in .local/bin — re-downloadable
+  - ".tmux.conf.bak-*" # Timestamped config/script backups
+  - "tmux-*.bak-*"
+  - "registrymodifications.xcu.bak-*"
+  - ".bashrc.backup.*"
+  - ".bashrc.pre-*"
+  - ".xsession-errors*"
 
 # Path patterns to exclude (matched against relative path using wildcards)
 exclude_path_patterns:
@@ -130,6 +162,14 @@ exclude_path_patterns:
   - "restore/*" # 11G restored Windows/WSL archives — already on Drive
   - "opt/*" # REAPER/DecentSampler installs — re-downloadable
   - "go/*" # Go module cache and built binaries (go install)
+  - ".atuin/bin/*" # atuin binary — re-downloadable
+  - ".config/gh/*" # GitHub CLI token (hosts.yml)
+  - ".config/gcloud/*" # gcloud credentials and access tokens
+  - ".var/app/*/data/pki/*" # Flatpak NSS key stores
+  - ".mozilla/firefox/*/datareporting/*" # Telemetry
+  - ".mozilla/firefox/*/security_state/*" # Downloaded revocation data
+  - ".mozilla/firefox/*/suggest.sqlite*" # Downloaded suggestion index
+  - ".mozilla/firefox/*/domain_to_categories.sqlite*" # Downloaded category data
 
 # Explicitly preserved paths inside otherwise-excluded trees (.omp, .local).
 include_path_patterns:
@@ -146,6 +186,11 @@ include_path_patterns:
   - "Code/drive-profile-backup/.omp/**"
   - ".local/bin/**" # User scripts — re-included through the pruned .local tree
   - ".local/share/applications/**" # Custom .desktop entries
+  - ".local/share/atuin/*.db*" # Shell history databases
+  - ".local/share/fish/fish_history" # Fish shell history
+  # Dotfiles source. Not "chezmoi/**": that would also walk its .git.
+  - ".local/share/chezmoi/[!.]*"
+  - ".local/share/chezmoi/.chezmoi*"
 
 # Specific files to exclude (exact relative paths, forward slashes).
 # The Windows-era list was dropped 2026-09-28: none of those files exist here.
