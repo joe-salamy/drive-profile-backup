@@ -149,6 +149,8 @@ exclude_files:
 
 # Path patterns to exclude (matched against relative path using wildcards)
 exclude_path_patterns:
+  - "Pictures/comfy/*" # comfy-pull gocryptfs vault, unlocked view: private ComfyUI outputs, never uploaded
+  - ".comfy-vault/*" # comfy-pull gocryptfs vault ciphertext: private, never uploaded
   - ".local/lib/**" # pip user site-packages — re-downloadable
   - ".local/share/**" # app data (flatpak, Steam, Trash, caches) — exceptions re-included below
   - ".local/go/*" # Go toolchain — re-downloadable
