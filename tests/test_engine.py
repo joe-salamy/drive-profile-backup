@@ -549,6 +549,46 @@ class TestBackupEngineUploadErrors:
         assert len(engine.stats.error_files) == 1
         assert "Upload failed" in engine.stats.error_files[0].error
 
+    def test_file_deleted_during_backup_is_skipped_not_failed(
+        self, tmp_path: Path
+    ) -> None:
+        file_path = tmp_path / "part-1.parquet"
+        file_path.write_text("test", encoding="utf-8")
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(tmp_path / "manifest.json"),
+        )
+        engine = BackupEngine(
+            config, dry_run=False, collect_machine_state_snapshot=False
+        )
+        mock_drive = MagicMock()
+        mock_drive.get_or_create_folder.return_value = "root_id"
+        mock_drive.find_file_by_name_and_parent.return_value = None
+
+        def compacted_away(*args: object, **kwargs: object) -> None:
+            file_path.unlink()
+            raise FileNotFoundError(2, "No such file or directory", str(file_path))
+
+        mock_drive.upload_file.side_effect = compacted_away
+        engine.drive = mock_drive
+        engine._root_folder_id = "root_id"
+        stat = file_path.stat()
+        entry = FileEntry(
+            path=str(file_path),
+            relative_path="part-1.parquet",
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+        )
+
+        engine._process_file(entry)
+
+        assert engine.stats.files_skipped_error == 0
+        assert engine.stats.error_files == []
+        assert [f.reason for f in engine.stats.skipped_files] == ["vanished"]
+
     def test_successful_upload_persists_manifest_before_run_finishes(
         self, tmp_path: Path
     ) -> None:

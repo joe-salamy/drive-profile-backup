@@ -255,7 +255,12 @@ def scan(config: Config) -> Iterator[FileEntry]:
                     size=0,
                     mtime=0,
                     is_skipped=True,
-                    skip_reason="symlink" if dangling else f"error: {e}",
+                    skip_reason="symlink"
+                    if dangling
+                    # Deleted between listing and stat: gone, not a failure.
+                    else "vanished"
+                    if isinstance(e, FileNotFoundError)
+                    else f"error: {e}",
                 )
                 continue
 

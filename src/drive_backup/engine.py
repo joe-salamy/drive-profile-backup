@@ -1007,6 +1007,25 @@ class BackupEngine:
         """Record a per-file upload failure."""
         if isinstance(error, ManifestProgressError):
             raise error
+        if isinstance(error, FileNotFoundError) and not os.path.lexists(work.file.path):
+            # Deleted after the scan (e.g. a data store compacting its files): nothing to
+            # back up, and its successor is picked up next run. Not a failure.
+            logger.info("Skipped %s: deleted during the backup", work.file.path)
+            self.stats.files_skipped_exclusion += 1
+            self.stats.skipped_files.append(
+                SkippedFile(
+                    path=work.file.path,
+                    relative_path=work.file.relative_path,
+                    size_bytes=work.file.size,
+                    size_human=work.file.size_human,
+                    modified=_format_mtime(work.file.mtime),
+                    reason="vanished",
+                    extension=work.file.extension,
+                )
+            )
+            if progress_callback:
+                progress_callback(work.file, ProgressEvent(ProgressKind.SKIPPED))
+            return
         logger.error("Failed to upload %s: %s", work.file.path, error)
         self.stats.files_skipped_error += 1
         self.stats.error_files.append(
