@@ -367,6 +367,34 @@ class TestScanner:
         assert len(skipped) == 1
         assert "excluded_by_path_pattern" in skipped[0].skip_reason
 
+    def test_kalshi_live_dataset_exclusion(self, tmp_path: Path) -> None:
+        tmp = str(tmp_path)
+        write_tree(
+            tmp_path,
+            {
+                "keep.txt": "keep",
+                "Code/autotrader/strategy.py": "strategy",
+                "Code/autotrader/data/kalshi/trades/date=2026-10-01/a.parquet": "ticks",
+                "Code/autotrader/data/kalshi/market_meta/date=2026-10-05/b.parquet": "meta",
+            },
+        )
+        config = Config(
+            profile_name="omen",
+            backup_root=tmp,
+            exclude_dirs=[],
+            exclude_files=[],
+            exclude_path_patterns=["Code/autotrader/data/kalshi/**"],
+        )
+        entries = list(scan(config))
+        paths = {e.relative_path for e in entries}
+
+        # "**" patterns prune the whole subtree during the walk (same as
+        # ".local/share/**"), so kalshi files never surface — not even as
+        # skipped records — while siblings back up normally.
+        assert "keep.txt" in paths
+        assert "Code/autotrader/strategy.py" in paths
+        assert not any(p.startswith("Code/autotrader/data/kalshi/") for p in paths)
+
     def test_specific_file_exclusion(self, tmp_path: Path) -> None:
         tmp = str(tmp_path)
         write_tree(

@@ -64,6 +64,16 @@ def _is_retryable_http_error(error: Any) -> bool:
     return False
 
 
+def _is_retryable_transient_error(error: BaseException) -> bool:
+    """Return whether a non-HTTP error is a transient stall worth retrying."""
+    # Covers SSL/network read timeouts (urllib3 raises
+    # TimeoutError("The read operation timed out")) and dropped connections
+    # (http.client errors subclass ConnectionError). Deliberately narrower
+    # than OSError: FileNotFoundError must propagate so the engine can record
+    # vanished files, and auth/config errors must fail fast.
+    return isinstance(error, (TimeoutError, ConnectionError))
+
+
 class RateLimiter:
     """Simple rate limiter to stay under Drive's write limit."""
 
@@ -280,9 +290,23 @@ class DriveAPI:
             resumable=resumable,
         )
 
-        return self._execute_with_retry(
-            lambda: self._do_upload(metadata, media, resumable)
-        )
+        try:
+            return self._execute_with_retry(
+                lambda: self._do_upload(metadata, media, resumable)
+            )
+        except (TimeoutError, ConnectionError):
+            # files.create is not idempotent: the server may have persisted
+            # the file while the response was lost. Reconcile by name before
+            # surfacing the error so a retry updates instead of duplicating.
+            found = self.find_file_by_name_and_parent(filename, parent_id)
+            if found is not None:
+                logger.warning(
+                    "Upload of '%s' stalled but the file exists on Drive; "
+                    "updating it instead of creating a duplicate",
+                    filename,
+                )
+                return self.update_file(found["id"], local_path, resumable=resumable)
+            raise
 
     def update_file(
         self,
@@ -384,6 +408,19 @@ class DriveAPI:
                     logger.warning(
                         "Retryable error %d, waiting %.1fs (attempt %d/%d)",
                         e.resp.status,
+                        wait,
+                        attempt + 1,
+                        self._max_retries,
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
+            except (TimeoutError, ConnectionError) as e:
+                if _is_retryable_transient_error(e) and attempt < self._max_retries - 1:
+                    wait = (2**attempt) + random.random()  # backoff + jitter
+                    logger.warning(
+                        "Transient %s, waiting %.1fs (attempt %d/%d)",
+                        type(e).__name__,
                         wait,
                         attempt + 1,
                         self._max_retries,

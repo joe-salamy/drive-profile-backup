@@ -137,6 +137,7 @@ exclude_path_patterns:
   - "Documents/*" # oln working-set mirror; the 3535 is the source of truth
   - "Downloads/*" # filemorph/oln exchange mirror; the 3535 is the source of truth
   - "Code/localfin-ai/data/budget.db*" # live WAL database; omen-nightly.sh snapshots it to _snapshots/
+  - "Code/autotrader/data/kalshi/**" # Live trading dataset, rewritten by the collector/compactor mid-backup (vanished-file + SSL read-timeout noise); re-fetchable, never a stable source of truth
 
 # Explicitly preserved paths inside otherwise-excluded trees (.omp, .local).
 # "*" also matches "/", so "dir/*.ext" matches at any depth below dir.

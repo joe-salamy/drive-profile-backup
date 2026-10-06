@@ -8,7 +8,12 @@ from unittest.mock import MagicMock
 import pytest
 from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
-from drive_backup.drive_api import DriveAPI, RateLimiter, _escape_drive_query_value
+from drive_backup.drive_api import (
+    DriveAPI,
+    RateLimiter,
+    _escape_drive_query_value,
+    _is_retryable_transient_error,
+)
 
 
 def _http_error(status: int) -> HttpError:
@@ -112,6 +117,122 @@ class TestDriveAPI:
 
         execute.assert_called_once()
         assert ("test", "parent_id") not in api._folder_cache
+
+    def test_retry_loop_retries_ssl_read_timeout_then_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json",
+            token_path="token.json",
+            max_retries=3,
+        )
+        mock_service = MagicMock()
+        execute = mock_service.files.return_value.list.return_value.execute
+        execute.side_effect = [
+            TimeoutError("The read operation timed out"),
+            {"files": [{"id": "folder_123", "name": "test"}]},
+        ]
+        api._service = mock_service
+        api._rate_limiter = MagicMock()
+        monkeypatch.setattr("drive_backup.drive_api.time.sleep", MagicMock())
+
+        assert api.get_or_create_folder("test", "parent_id") == "folder_123"
+        assert execute.call_count == 2
+
+    def test_retry_loop_does_not_retry_file_not_found(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json",
+            token_path="token.json",
+            max_retries=3,
+        )
+        calls = 0
+
+        def fail_missing() -> None:
+            nonlocal calls
+            calls += 1
+            raise FileNotFoundError("vanished mid-backup")
+
+        monkeypatch.setattr("drive_backup.drive_api.time.sleep", MagicMock())
+
+        with pytest.raises(FileNotFoundError):
+            api._execute_with_retry(fail_missing)
+
+        assert calls == 1
+
+    def test_retry_loop_exhausts_transient_errors(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json",
+            token_path="token.json",
+            max_retries=2,
+        )
+        calls = 0
+
+        def always_timeout() -> None:
+            nonlocal calls
+            calls += 1
+            raise TimeoutError("The read operation timed out")
+
+        monkeypatch.setattr("drive_backup.drive_api.time.sleep", MagicMock())
+
+        with pytest.raises(TimeoutError):
+            api._execute_with_retry(always_timeout)
+
+        assert calls == 2
+
+    def test_upload_reconciles_stalled_create_as_update(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    ) -> None:
+        from pathlib import Path as _Path
+
+        local = _Path(str(tmp_path)) / "data.parquet"
+        local.write_bytes(b"parquet-bytes")
+        api = DriveAPI(credentials_path="creds.json", token_path="token.json")
+        api._execute_with_retry = MagicMock(  # type: ignore[method-assign]
+            side_effect=TimeoutError("The read operation timed out")
+        )
+        api.find_file_by_name_and_parent = MagicMock(  # type: ignore[method-assign]
+            return_value={"id": "drive_1", "name": "data.parquet"}
+        )
+        updated = {"id": "drive_1", "name": "data.parquet"}
+        api.update_file = MagicMock(return_value=updated)  # type: ignore[method-assign]
+        monkeypatch.setattr("drive_backup.drive_api.time.sleep", MagicMock())
+
+        assert api.upload_file(str(local), "parent_1") == updated
+        api.find_file_by_name_and_parent.assert_called_once_with(
+            "data.parquet", "parent_1"
+        )
+        api.update_file.assert_called_once()
+
+    def test_upload_reraises_stall_when_drive_has_no_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    ) -> None:
+        from pathlib import Path as _Path
+
+        local = _Path(str(tmp_path)) / "data.parquet"
+        local.write_bytes(b"parquet-bytes")
+        api = DriveAPI(credentials_path="creds.json", token_path="token.json")
+        api._execute_with_retry = MagicMock(  # type: ignore[method-assign]
+            side_effect=TimeoutError("The read operation timed out")
+        )
+        api.find_file_by_name_and_parent = MagicMock(  # type: ignore[method-assign]
+            return_value=None
+        )
+        api.update_file = MagicMock()  # type: ignore[method-assign]
+        monkeypatch.setattr("drive_backup.drive_api.time.sleep", MagicMock())
+
+        with pytest.raises(TimeoutError):
+            api.upload_file(str(local), "parent_1")
+        api.update_file.assert_not_called()
+
+    def test_transient_error_classifier(self) -> None:
+        assert _is_retryable_transient_error(TimeoutError("stall"))
+        assert _is_retryable_transient_error(ConnectionError("reset"))
+        assert not _is_retryable_transient_error(FileNotFoundError("gone"))
+        assert not _is_retryable_transient_error(ValueError("config"))
 
     def test_folder_create_throttles_every_retry(
         self, monkeypatch: pytest.MonkeyPatch
