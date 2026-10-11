@@ -121,6 +121,8 @@ exclude_files:
 exclude_path_patterns:
   - ".comfy-private/*" # ComfyUI gocryptfs vault, unlocked view (comfy-on -p): private, never uploaded
   - ".comfy-vault/*" # ComfyUI gocryptfs vault ciphertext: private, never uploaded
+  - ".omp-private/*" # omp-private gocryptfs vault, unlocked view (priv-on): throwaway scratch, never uploaded
+  - ".omp-vault/*" # omp-private gocryptfs vault ciphertext: private, never uploaded
   - "ComfyUI/temp/*" # ComfyUI scratch/preview images (ComfyUI/{output,input,user} are backed up)
   - ".local/lib/**" # pip user site-packages — re-downloadable
   - ".local/share/**" # app data (flatpak, Steam, Trash, caches) — exceptions re-included below
