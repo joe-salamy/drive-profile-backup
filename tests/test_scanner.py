@@ -2,14 +2,12 @@
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+import pytest
 
 from drive_backup.config import Config
 from drive_backup.scanner import FileEntry, scan
 from tests.file_helpers import write_tree
-
-if TYPE_CHECKING:
-    import pytest
 
 
 class TestScanner:
@@ -50,6 +48,7 @@ class TestScanner:
         assert entry.is_skipped
         assert entry.skip_reason == "symlink"
 
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX-only")
     def test_fifo_is_skipped_not_opened(self, tmp_path: Path) -> None:
         os.mkfifo(tmp_path / "brain.sock")
         config = Config(
