@@ -142,6 +142,7 @@ class TestGenerateReport:
             "bytes_encrypted_uploaded",
             "total_size_encrypted_human",
         )
+
     def test_report_includes_skipped_files(self) -> None:
         stats = BackupStats(
             skipped_files=[

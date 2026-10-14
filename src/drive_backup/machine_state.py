@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -108,7 +108,7 @@ def run_resolved_tool(
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _warning(label: str, error: object) -> str:
@@ -867,7 +867,9 @@ def _collect_git_repos(
         # Remove excluded dirnames in-place.
         # Filter dirnames: skip known caches and ephemeral.
         original_dirnames = list(dirnames)
-        dirnames[:] = [d for d in dirnames if d not in skip_dir_names and d not in ephemeral_parts]
+        dirnames[:] = [
+            d for d in dirnames if d not in skip_dir_names and d not in ephemeral_parts
+        ]
         # Also skip any dirname that matches "*.egg-info"
         dirnames[:] = [d for d in dirnames if not d.endswith(".egg-info")]
         # Skip nested worktree detection: if any part of relative path contains ephemeral, prune.
@@ -893,7 +895,11 @@ def _collect_git_repos(
                 branch = ""
                 sha = ""
                 # remote get-url origin
-                result, error = _run_catching([git, "-C", dirpath, "remote", "get-url", "origin"], timeout=COMMAND_TIMEOUT, runner=runner)
+                result, error = _run_catching(
+                    [git, "-C", dirpath, "remote", "get-url", "origin"],
+                    timeout=COMMAND_TIMEOUT,
+                    runner=runner,
+                )
                 if error is None and result is not None and result.returncode == 0:
                     remote_url = result.stdout.strip()
                     has_remote = bool(remote_url)
@@ -901,11 +907,19 @@ def _collect_git_repos(
                 elif error is not None:
                     warnings.append(f"{relative_path}: remote probe: {error}")
                 # branch
-                result2, error2 = _run_catching([git, "-C", dirpath, "rev-parse", "--abbrev-ref", "HEAD"], timeout=COMMAND_TIMEOUT, runner=runner)
+                result2, error2 = _run_catching(
+                    [git, "-C", dirpath, "rev-parse", "--abbrev-ref", "HEAD"],
+                    timeout=COMMAND_TIMEOUT,
+                    runner=runner,
+                )
                 if error2 is None and result2 is not None and result2.returncode == 0:
                     branch = result2.stdout.strip()
                 # sha
-                result3, error3 = _run_catching([git, "-C", dirpath, "rev-parse", "HEAD"], timeout=COMMAND_TIMEOUT, runner=runner)
+                result3, error3 = _run_catching(
+                    [git, "-C", dirpath, "rev-parse", "HEAD"],
+                    timeout=COMMAND_TIMEOUT,
+                    runner=runner,
+                )
                 if error3 is None and result3 is not None and result3.returncode == 0:
                     sha = result3.stdout.strip()
                 repos.append(
@@ -1071,7 +1085,8 @@ def collect_machine_state(
                         previous_output_retained=False,
                     )
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
+                # Intentionally broad: one collector must not abort the rest.
                 warning = _warning(f"Unexpected {name} collector failure", error)
                 logger.warning(warning)
                 outcomes.append(_failed_outcome(name, output_path, warning))
@@ -1093,7 +1108,7 @@ def collect_machine_state(
     }
     try:
         atomic_write_json(snapshot_path, snapshot)
-    except Exception as error:
+    except (OSError, TypeError, ValueError) as error:
         warning = _warning("Could not write machine-state snapshot metadata", error)
         logger.warning(warning)
         outcomes.append(

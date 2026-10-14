@@ -37,7 +37,7 @@ def atomic_write_json(path: str | Path, data: object) -> None:
                 pass
 
 
-def human_size(num_bytes: int | float) -> str:
+def human_size(num_bytes: float) -> str:
     """Convert bytes to human-readable string."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(num_bytes) < 1024:

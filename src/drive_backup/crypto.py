@@ -64,7 +64,7 @@ def _decode_stored_key(data: bytes) -> bytes | None:
                     decoded = base64.b64decode(text, validate=True)
                     if len(decoded) == KEY_BYTES:
                         return decoded
-                except Exception:
+                except ValueError:  # binascii.Error subclasses ValueError
                     pass
             return data
 
@@ -95,7 +95,7 @@ def _decode_stored_key(data: bytes) -> bytes | None:
         decoded = base64.b64decode(padded, validate=True)
         if len(decoded) == KEY_BYTES:
             return decoded
-    except Exception:
+    except ValueError:  # binascii.Error subclasses ValueError
         pass
     # Raw bytes stored as text? Already handled len==32 case
     return None
@@ -200,8 +200,7 @@ def encrypt_file(plaintext_path: str, ciphertext_path: str, key: bytes) -> None:
         raise ValueError("Invalid key length for encryption")
     # Normalize Windows long path prefix
     normalized = plaintext_path
-    if normalized.startswith("\\\\?\\"):
-        normalized = normalized[4:]
+    normalized = normalized.removeprefix("\\\\?\\")
     plaintext = Path(normalized).read_bytes()
     nonce = os.urandom(NONCE_BYTES)
     aesgcm = AESGCM(key)
@@ -241,8 +240,7 @@ def decrypt_file(ciphertext_path: str, plaintext_path: str, key: bytes) -> None:
     if len(key) != KEY_BYTES:
         raise ValueError("Invalid key length for decryption")
     normalized = ciphertext_path
-    if normalized.startswith("\\\\?\\"):
-        normalized = normalized[4:]
+    normalized = normalized.removeprefix("\\\\?\\")
     data = Path(normalized).read_bytes()
     if len(data) < 1 + NONCE_BYTES + 16:  # version + nonce + tag
         raise ValueError("Decryption failed — file too short or corrupted")
@@ -291,8 +289,7 @@ def decrypt_file(ciphertext_path: str, plaintext_path: str, key: bytes) -> None:
 def is_encrypted_file(path: str) -> bool:
     """Check if a file looks like an encrypted file (version byte check)."""
     normalized = path
-    if normalized.startswith("\\\\?\\"):
-        normalized = normalized[4:]
+    normalized = normalized.removeprefix("\\\\?\\")
     try:
         with open(normalized, "rb") as f:
             first = f.read(1)

@@ -316,7 +316,7 @@ def _validate_config_values(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Configuration root must be a mapping")
 
-    unknown_keys = sorted((str(key) for key in data if key not in _CONFIG_FIELDS))
+    unknown_keys = sorted(str(key) for key in data if key not in _CONFIG_FIELDS)
     if unknown_keys:
         raise ValueError(f"Unknown configuration keys: {', '.join(unknown_keys)}")
 
@@ -332,11 +332,7 @@ def _validate_config_values(data: Any) -> dict[str, Any]:
             ):
                 raise _invalid_value(field_name, "expected a list of strings")
             values[field_name] = value
-        elif field_name == "exclude_symlinks":
-            if type(value) is not bool:
-                raise _invalid_value(field_name, "expected a boolean")
-            values[field_name] = value
-        elif field_name == "encrypt_secrets":
+        elif field_name == "exclude_symlinks" or field_name == "encrypt_secrets":
             if type(value) is not bool:
                 raise _invalid_value(field_name, "expected a boolean")
             values[field_name] = value

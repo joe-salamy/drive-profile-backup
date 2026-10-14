@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -26,8 +26,8 @@ from drive_backup.report import (
     BackupReport,
     BackupStats,
     ErrorFile,
-    PruneError,
     PrunedFile,
+    PruneError,
     SkippedFile,
     UploadFile,
     generate_report,
@@ -140,17 +140,19 @@ class BackupEngine:
                     self.config.secrets_key_path,
                 )
                 return None
-            except Exception as e:
+            except (ImportError, OSError, ValueError) as e:
                 logger.error("Failed to load secrets key: %s", e)
                 return None
         try:
             from drive_backup import crypto
 
-            key, was_generated = crypto.load_or_generate_key(self.config.secrets_key_path)
+            key, was_generated = crypto.load_or_generate_key(
+                self.config.secrets_key_path
+            )
             self._secrets_key = key
             self._secrets_key_was_generated = was_generated
             return key
-        except Exception as e:
+        except (ImportError, OSError, ValueError) as e:
             logger.error("Failed to load or generate secrets key: %s", e)
             return None
 
@@ -182,7 +184,8 @@ class BackupEngine:
                 self.stats.machine_state_collectors = collect_machine_state(
                     self.config.backup_root, self.config.machine_state_collectors
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001
+                # Intentionally broad: refresh must never abort the backup.
                 warning = f"Unexpected machine-state refresh failure: {error}"
                 logger.warning(warning)
                 failed_names = [*self.config.machine_state_collectors, "snapshot"]
@@ -279,7 +282,7 @@ class BackupEngine:
                 "reports",
             )
             os.makedirs(report_dir, exist_ok=True)
-            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+            timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
             prefix = "dry-run-" if self.dry_run else ""
             report_path = os.path.join(report_dir, f"{prefix}backup-{timestamp}.json")
             save_report(report, report_path)
@@ -297,10 +300,7 @@ class BackupEngine:
                 for file_entry in scan(self.config):
                     self.stats.files_scanned += 1
                     # Prepare upload work (handles skips/dedup)
-                    try:
-                        work = self._prepare_upload(file_entry, progress_callback)
-                    except ManifestProgressError:
-                        raise
+                    work = self._prepare_upload(file_entry, progress_callback)
                     if work is None:
                         # Check periodic checkpoint after skip/dedup
                         try:
@@ -324,7 +324,8 @@ class BackupEngine:
                         w = futures.pop(fut)
                         try:
                             result = fut.result()
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001
+                            # Intentionally broad: recorded as a per-file error.
                             self._record_upload_error(w, exc, progress_callback)
                         else:
                             try:
@@ -379,7 +380,8 @@ class BackupEngine:
                             w = futures.pop(fut)
                             try:
                                 result = fut.result()
-                            except Exception as exc:
+                            except Exception as exc:  # noqa: BLE001
+                                # Intentionally broad: recorded as a per-file error.
                                 self._record_upload_error(w, exc, progress_callback)
                             else:
                                 try:
@@ -431,7 +433,8 @@ class BackupEngine:
                         w = futures.pop(fut)
                         try:
                             result = fut.result()
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001
+                            # Intentionally broad: recorded as a per-file error.
                             self._record_upload_error(w, exc, progress_callback)
                         else:
                             try:
@@ -465,7 +468,8 @@ class BackupEngine:
                         if fut.done() and not fut.cancelled():
                             try:
                                 result = fut.result()
-                            except Exception as exc:
+                            except Exception as exc:  # noqa: BLE001
+                                # Intentionally broad: recorded as a per-file error.
                                 self._record_upload_error(w, exc, progress_callback)
                             else:
                                 try:
@@ -547,7 +551,7 @@ class BackupEngine:
                 "reports",
             )
             os.makedirs(report_dir, exist_ok=True)
-            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+            timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
             prefix = "dry-run-" if self.dry_run else ""
             report_path = os.path.join(report_dir, f"{prefix}backup-{timestamp}.json")
             save_report(report, report_path)
@@ -561,7 +565,8 @@ class BackupEngine:
                     )
                     self.drive.upload_file(report_path, reports_folder_id)
                     logger.info("Report uploaded to Drive/_reports/")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
+                    # Intentionally broad: report upload is best effort.
                     logger.warning("Report upload failed: %s", e)
 
             return report
@@ -586,15 +591,16 @@ class BackupEngine:
                     "reports",
                 )
                 os.makedirs(report_dir, exist_ok=True)
-                timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+                timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
                 prefix = "dry-run-" if self.dry_run else ""
                 report_path = os.path.join(
                     report_dir, f"{prefix}backup-{timestamp}.json"
                 )
                 save_report(report, report_path)
                 logger.info("Report saved to %s", report_path)
-            except Exception:
-                pass
+            except Exception as report_error:  # noqa: BLE001
+                # Intentionally broad: must not mask the checkpoint error.
+                logger.warning("Failed to save report: %s", report_error)
             raise
         except KeyboardInterrupt:
             # Ensure end_time and local report? For interrupt, we flushed, but should propagate KeyboardInterrupt
@@ -609,7 +615,6 @@ class BackupEngine:
                     executor.shutdown(wait=True)
                 # If we are in normal path and haven't yet handled final checkpoint failure, the finally here already handled?
                 # The outer try's final checkpoint is inside the try, so this finally just cleans executor.
-                pass
 
     def _resolve_backup_folder(self) -> str:
         """Return the Drive folder ID used as the backup root."""
@@ -689,7 +694,8 @@ class BackupEngine:
             logger.warning(
                 "Without this key encrypted backups on Drive CANNOT be decrypted. Store offline."
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            # Intentionally broad: display is best effort.
             logger.warning("Failed to display generated secrets key: %s", e)
 
     def _upload_manifest_snapshot(self) -> None:
@@ -703,7 +709,8 @@ class BackupEngine:
             else:
                 self.drive.upload_file(self.config.manifest_path, meta_id)
             self.stats.manifest_snapshot_uploaded = True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            # Intentionally broad: snapshot upload is best effort.
             self.stats.manifest_snapshot_error = str(e)
             logger.warning("Manifest snapshot upload failed: %s", e)
 
@@ -734,7 +741,8 @@ class BackupEngine:
                 "Downloaded manifest snapshot: %d entries",
                 len(self.manifest.entries),
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            # Intentionally broad: snapshot download is best effort.
             logger.warning("Manifest snapshot download failed: %s", e)
 
     def _prepare_upload(
@@ -889,16 +897,19 @@ class BackupEngine:
 
         # Encrypted path — encrypt to temp file and upload as *.enc
         if work.is_encrypted:
-            assert self._secrets_key is not None, "secrets key required for encrypted upload"
+            assert (
+                self._secrets_key is not None
+            ), "secrets key required for encrypted upload"
             # Normalize Windows long path prefix for reading
             plaintext_path = file.path
-            if plaintext_path.startswith("\\\\?\\"):
-                plaintext_path = plaintext_path[4:]
+            plaintext_path = plaintext_path.removeprefix("\\\\?\\")
             # Determine Drive parent (original relative dir, no .enc)
             rel_dir = os.path.dirname(file.relative_path)
             if rel_dir:
                 path_parts = rel_dir.split("/")
-                parent_id = self.drive.ensure_folder_path(path_parts, self._root_folder_id)
+                parent_id = self.drive.ensure_folder_path(
+                    path_parts, self._root_folder_id
+                )
             else:
                 parent_id = self._root_folder_id
             # Encrypted filename is original basename + .enc
@@ -916,7 +927,9 @@ class BackupEngine:
                 from drive_backup import crypto
 
                 crypto.encrypt_file(plaintext_path, enc_path, self._secrets_key)
-                resumable = os.path.getsize(enc_path) > self.config.resumable_threshold_bytes
+                resumable = (
+                    os.path.getsize(enc_path) > self.config.resumable_threshold_bytes
+                )
                 result = self._put_file(
                     enc_path, parent_id, work.existing_drive_file_id, resumable
                 )
@@ -960,6 +973,7 @@ class BackupEngine:
         return UploadResult(
             md5=md5, drive_file_id=drive_file_id, drive_parent_id=parent_id
         )
+
     def _complete_upload(
         self,
         work: UploadWork,
@@ -972,8 +986,7 @@ class BackupEngine:
         if not md5:
             # For encrypted, compute plaintext MD5; for others, file.path
             norm = file.path
-            if norm.startswith("\\\\?\\"):
-                norm = norm[4:]
+            norm = norm.removeprefix("\\\\?\\")
             md5 = compute_md5(norm) or ""
 
         self.manifest.set(
@@ -998,6 +1011,7 @@ class BackupEngine:
         # Caller decides when to flush; we don't auto-flush here to allow batching,
         # but the outer loop will call _maybe_save after each completion.
         # However to keep the contract that _complete marks dirty, we leave flush to caller.
+
     def _record_upload_error(
         self,
         work: UploadWork,
@@ -1055,7 +1069,8 @@ class BackupEngine:
             result = self._execute_upload(work)
         except ManifestProgressError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
+            # Intentionally broad: recorded as a per-file error.
             self._record_upload_error(work, exc, progress_callback)
             return
         try:
@@ -1067,7 +1082,8 @@ class BackupEngine:
             self._last_manifest_checkpoint_at = time.monotonic()
         except ManifestProgressError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
+            # Intentionally broad: recorded as a per-file error.
             self._record_upload_error(work, exc, progress_callback)
 
     def _upload_file(self, file: FileEntry, reason: str) -> None:
@@ -1191,7 +1207,8 @@ class BackupEngine:
                 self._record_pruned_file(relative_path, entry)
             except ManifestProgressError:
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
+                # Intentionally broad: one prune failure must not abort pruning.
                 logger.error("Failed to prune %s: %s", relative_path, e)
                 self.stats.files_prune_failed += 1
                 self.stats.prune_error_files.append(
@@ -1207,4 +1224,4 @@ def _format_mtime(mtime: float) -> str:
     """Format a modification time as ISO string."""
     if mtime == 0:
         return ""
-    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(mtime, tz=UTC).isoformat()

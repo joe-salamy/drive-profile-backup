@@ -203,9 +203,10 @@ def main(argv: list[str] | None = None) -> None:
 
     # Handle key generation helper
     if args.generate_secrets_key:
-        from drive_backup import crypto
         from rich.panel import Panel
         from rich.text import Text
+
+        from drive_backup import crypto
 
         key_path = args.decrypt_key or config.secrets_key_path
         try:

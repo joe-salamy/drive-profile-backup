@@ -16,7 +16,7 @@ import tempfile
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import TextIO, cast
 
 from drive_backup.config import Config, load_config
@@ -26,6 +26,11 @@ from drive_backup.utils import human_size
 _WIN32 = sys.platform == "win32"
 _MAX_PATH = 260
 CountSize = dict[str, int]
+
+
+def _local_today() -> date:
+    """Return today's date in the local timezone (report dates are local)."""
+    return datetime.now().astimezone().date()
 
 
 def _root_folder(rel_path: str) -> str:
@@ -188,7 +193,7 @@ def _render_full_profile_report(
     backup_total_size: int = 0,
 ) -> str:
     """Render an unrestricted profile scan as markdown."""
-    today = date.today().isoformat()
+    today = _local_today().isoformat()
     mins, secs = divmod(int(stats.elapsed), 60)
     lines: list[str] = []
 
@@ -319,7 +324,7 @@ def generate_full_profile_reports(
 
     Returns list of output file paths created.
     """
-    today = date.today().isoformat()
+    today = _local_today().isoformat()
     os.makedirs(out_dir, exist_ok=True)
     outputs: list[str] = []
 
@@ -586,7 +591,7 @@ def _write_summary(
 
 def generate_summary(config_path: str, out_dir: str) -> SummaryResult:
     config = load_config(config_path)
-    today = date.today()
+    today = _local_today()
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"profile-summary-{today.isoformat()}.md")
 

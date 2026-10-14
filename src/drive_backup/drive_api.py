@@ -51,16 +51,11 @@ def _is_retryable_http_error(error: Any) -> bool:
                             return True
             # Some responses put reason directly in error object
             reason = error_obj.get("reason", "") if isinstance(error_obj, dict) else ""
-            if reason in ("rateLimitExceeded", "userRateLimitExceeded"):
-                return True
-            return False
-        except Exception:
+            return reason in ("rateLimitExceeded", "userRateLimitExceeded")
+        except (TypeError, ValueError):
             # Fallback: check raw content for known rate-limit tokens if JSON parse fails
-            try:
-                text = content if isinstance(content, str) else str(content)
-                return "rateLimitExceeded" in text or "userRateLimitExceeded" in text
-            except Exception:
-                return False
+            text = content if isinstance(content, str) else str(content)
+            return "rateLimitExceeded" in text or "userRateLimitExceeded" in text
     return False
 
 
@@ -136,7 +131,9 @@ class DriveAPI:
         """Run OAuth2 flow and build the Drive service."""
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-untyped]
+        from google_auth_oauthlib.flow import (  # type: ignore[import-untyped]
+            InstalledAppFlow,
+        )
 
         creds = None
         token_path = os.path.expanduser(self._token_path)
@@ -186,10 +183,10 @@ class DriveAPI:
         if (
             self._main_thread_ident is not None
             and threading.get_ident() == self._main_thread_ident
+            and self._service is not None
         ):
-            if self._service is not None:
-                self._local.service = self._service
-                return self._service
+            self._local.service = self._service
+            return self._service
         # Worker thread: lazily build a new service
         svc = self._build_service(self._credentials)
         self._local.service = svc

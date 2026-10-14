@@ -9,7 +9,7 @@ import math
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from drive_backup.scanner import FileEntry
@@ -33,6 +33,7 @@ class ManifestEntry:
     pruned: bool = False
     encrypted: bool = False
 
+
 class ManifestLoadError(RuntimeError):
     """Raised when an existing manifest cannot be loaded safely."""
 
@@ -47,6 +48,8 @@ _MANIFEST_ENTRY_FIELDS = {
 }
 _MANIFEST_ENTRY_STRING_FIELDS = _MANIFEST_ENTRY_FIELDS - {"size", "mtime"}
 _MANIFEST_ENTRY_OPTIONAL_BOOL_FIELDS = {"pruned", "encrypted"}
+
+
 def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
     if not isinstance(data, Mapping):
         raise ValueError("manifest root must be a mapping")
@@ -63,7 +66,9 @@ def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
             raise ValueError("manifest file paths must be strings")
         if not isinstance(entry_data, Mapping):
             raise ValueError(f"entry {relative_path!r} must be a mapping")
-        unknown = set(entry_data) - (_MANIFEST_ENTRY_FIELDS | _MANIFEST_ENTRY_OPTIONAL_BOOL_FIELDS)
+        unknown = set(entry_data) - (
+            _MANIFEST_ENTRY_FIELDS | _MANIFEST_ENTRY_OPTIONAL_BOOL_FIELDS
+        )
         if unknown:
             raise ValueError(
                 f"entry {relative_path!r} contains unknown keys: "
@@ -110,6 +115,7 @@ def _load_manifest_entries(data: Any) -> dict[str, ManifestEntry]:
         )
     return entries
 
+
 @dataclass
 class Manifest:
     """Tracks what has been uploaded to Drive."""
@@ -138,7 +144,7 @@ class Manifest:
 
         data: dict[str, object] = {
             "version": 1,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
             "file_count": len(self.entries),
             "files": {
                 rel_path: asdict(entry) for rel_path, entry in self.entries.items()
@@ -176,10 +182,11 @@ class Manifest:
             mtime=mtime,
             drive_file_id=drive_file_id,
             drive_parent_id=drive_parent_id,
-            last_uploaded=datetime.now(timezone.utc).isoformat(),
+            last_uploaded=datetime.now(UTC).isoformat(),
             pruned=pruned,
             encrypted=encrypted,
         )
+
 
 def compute_md5(path: str) -> str | None:
     """Compute MD5 hex digest of a file, streaming in chunks.

@@ -49,7 +49,7 @@ def plan_title(plan_path: Path) -> str:
 
 
 def timestamped_run_id(slug: str, *, stamp: str | None = None) -> str:
-    timestamp = stamp or datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = stamp or datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     return f"{timestamp}-{slug}"
 
 

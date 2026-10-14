@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import signal
 import sys
 import types
@@ -657,7 +656,9 @@ class TestExitStatus:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def run() -> BackupReport:
-            os.kill(os.getpid(), signal.SIGTERM)
+            # raise_signal runs the installed handler on every platform;
+            # os.kill(SIGTERM) on Windows is TerminateProcess and kills pytest.
+            signal.raise_signal(signal.SIGTERM)
             raise AssertionError("SIGTERM handler did not interrupt the run")
 
         with pytest.raises(SystemExit) as excinfo:

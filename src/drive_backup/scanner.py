@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 from stat import S_ISREG
-from typing import Iterator
 
 from drive_backup.config import Config
 from drive_backup.utils import human_size
@@ -91,6 +91,21 @@ def _is_in_secret_dir(rel_path: str) -> bool:
     parts = rel_path.split("/")
     # All components except the final filename
     return any(part in SECRETS_DIR_NAMES for part in parts[:-1])
+
+
+def _is_secrets_key_file(full_path: str, secrets_key_path: str) -> bool:
+    """Check if full_path is the (already expanduser'd) encryption key file.
+
+    Compares absolute normalized paths (handles Windows \\\\?\\ prefix and case).
+    """
+    normalized_full = full_path.removeprefix("\\\\?\\")
+    try:
+        return os.path.abspath(os.path.normcase(normalized_full)) == os.path.abspath(
+            os.path.normcase(secrets_key_path)
+        )
+    except (OSError, ValueError):
+        # If path comparison fails, fall through to normal handling
+        return False
 
 
 def _is_included_path(rel_path: str, patterns: list[str]) -> bool:
@@ -255,12 +270,16 @@ def scan(config: Config) -> Iterator[FileEntry]:
                     size=0,
                     mtime=0,
                     is_skipped=True,
-                    skip_reason="symlink"
-                    if dangling
-                    # Deleted between listing and stat: gone, not a failure.
-                    else "vanished"
-                    if isinstance(e, FileNotFoundError)
-                    else f"error: {e}",
+                    skip_reason=(
+                        "symlink"
+                        if dangling
+                        # Deleted between listing and stat: gone, not a failure.
+                        else (
+                            "vanished"
+                            if isinstance(e, FileNotFoundError)
+                            else f"error: {e}"
+                        )
+                    ),
                 )
                 continue
 
@@ -294,31 +313,23 @@ def scan(config: Config) -> Iterator[FileEntry]:
                 continue
 
             # Never back up the encryption key file itself, wherever it lives.
-            # Compare absolute normalized paths (handle Windows \\?\ prefix and case).
-            try:
-                secrets_key_expanded = config.secrets_key_path  # already expanduser'd
-                normalized_full = full_path[4:] if full_path.startswith("\\\\?\\") else full_path
-                if os.path.abspath(os.path.normcase(normalized_full)) == os.path.abspath(
-                    os.path.normcase(secrets_key_expanded)
-                ):
-                    yield FileEntry(
-                        path=full_path,
-                        relative_path=rel_path,
-                        size=size,
-                        mtime=mtime,
-                        is_skipped=True,
-                        skip_reason="excluded_by_specific_file",
-                    )
-                    continue
-            except Exception:
-                # If path comparison fails, fall through to normal handling
-                pass
+            if _is_secrets_key_file(full_path, config.secrets_key_path):
+                yield FileEntry(
+                    path=full_path,
+                    relative_path=rel_path,
+                    size=size,
+                    mtime=mtime,
+                    is_skipped=True,
+                    skip_reason="excluded_by_specific_file",
+                )
+                continue
 
             # Determine if this file is a secret that should be encrypted
             is_secret = False
-            if config.encrypt_secrets:
-                if _is_secret_file(filename) or _is_in_secret_dir(rel_path):
-                    is_secret = True
+            if config.encrypt_secrets and (
+                _is_secret_file(filename) or _is_in_secret_dir(rel_path)
+            ):
+                is_secret = True
 
             # Check file name exclusions — overridden for secrets when encryption enabled
             if _is_excluded_file(filename, config.exclude_files):

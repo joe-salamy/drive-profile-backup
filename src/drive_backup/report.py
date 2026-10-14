@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TypedDict
 
 from drive_backup.machine_state import CollectorOutcome
@@ -105,6 +105,7 @@ class BackupReport(TypedDict):
     bytes_encrypted_uploaded: int
     total_size_encrypted_human: str
 
+
 @dataclass
 class SkippedFile:
     """A file that was skipped during backup."""
@@ -154,6 +155,8 @@ class PruneError:
     relative_path: str
     drive_file_id: str
     error: str
+
+
 @dataclass
 class BackupStats:
     """Accumulated statistics for a backup run."""
@@ -237,7 +240,7 @@ def _extension_breakdown(
 def generate_report(stats: BackupStats) -> BackupReport:
     """Build the full JSON report structure from backup stats."""
     return {
-        "backup_timestamp": datetime.now(timezone.utc).isoformat(),
+        "backup_timestamp": datetime.now(UTC).isoformat(),
         "duration_seconds": round(stats.duration_seconds, 2),
         "duration_human": stats.duration_human,
         "backup_root": stats.backup_root,

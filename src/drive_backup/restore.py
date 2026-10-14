@@ -48,16 +48,25 @@ def _clone_or_init_git_repo(
                 target.mkdir(parents=True, exist_ok=True)
                 # init
                 result = subprocess.run(
-                    [git, "init"], cwd=str(target), capture_output=True, text=True, timeout=120
+                    [git, "init"],
+                    cwd=str(target),
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
                 )
                 if result.returncode != 0:
-                    return False, f"git init failed: {result.stderr.strip() or result.stdout.strip()}"
+                    return (
+                        False,
+                        f"git init failed: {result.stderr.strip() or result.stdout.strip()}",
+                    )
                 result = subprocess.run(
                     [git, "remote", "add", "origin", remote_url],
                     cwd=str(target),
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    check=False,
                 )
                 if result.returncode != 0:
                     # remote may already exist — try set-url
@@ -67,6 +76,7 @@ def _clone_or_init_git_repo(
                         capture_output=True,
                         text=True,
                         timeout=30,
+                        check=False,
                     )
                     if result2.returncode != 0:
                         return False, f"git remote add failed: {result.stderr.strip()}"
@@ -76,13 +86,17 @@ def _clone_or_init_git_repo(
                     capture_output=True,
                     text=True,
                     timeout=300,
+                    check=False,
                 )
                 if result.returncode != 0:
-                    return False, f"git fetch failed: {result.stderr.strip() or result.stdout.strip()}"
+                    return (
+                        False,
+                        f"git fetch failed: {result.stderr.strip() or result.stdout.strip()}",
+                    )
                 return True, None
             except subprocess.TimeoutExpired:
                 return False, "git operation timed out"
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 return False, str(e)
     # Empty or non-existent — clone
     try:
@@ -99,13 +113,17 @@ def _clone_or_init_git_repo(
             capture_output=True,
             text=True,
             timeout=300,
+            check=False,
         )
         if result.returncode != 0:
-            return False, f"git clone failed: {result.stderr.strip() or result.stdout.strip()}"
+            return (
+                False,
+                f"git clone failed: {result.stderr.strip() or result.stdout.strip()}",
+            )
         return True, None
     except subprocess.TimeoutExpired:
         return False, "git clone timed out"
-    except Exception as e:
+    except (OSError, ValueError) as e:
         return False, str(e)
 
 
@@ -163,11 +181,17 @@ def restore_backup(
 
     # Determine decryption key if needed
     wants_decrypt = decrypt
-    has_encrypted = any(bool(getattr(e, "encrypted", False)) for e in manifest.entries.values())
+    has_encrypted = any(
+        bool(getattr(e, "encrypted", False)) for e in manifest.entries.values()
+    )
     decrypt_key: bytes | None = None
     missing_key = False
     if wants_decrypt and has_encrypted:
-        key_path_raw = decrypt_key_path if decrypt_key_path is not None else config.secrets_key_path
+        key_path_raw = (
+            decrypt_key_path
+            if decrypt_key_path is not None
+            else config.secrets_key_path
+        )
         expanded_key_path = os.path.expanduser(key_path_raw)
         try:
             from drive_backup import crypto
@@ -183,20 +207,26 @@ def restore_backup(
                 expanded_key_path,
             )
             missing_key = True
-            errors.append({"relative_path": "<secrets-key>", "error": "missing secrets key"})
+            errors.append(
+                {"relative_path": "<secrets-key>", "error": "missing secrets key"}
+            )
         except ModuleNotFoundError as e:
             raise RuntimeError("pip install cryptography required to decrypt") from e
         except Exception as e:
             # Handle cryptography import errors that surface as generic Exception
             if "cryptography" in str(e).lower() or "Crypto" in str(type(e).__name__):
-                raise RuntimeError("pip install cryptography required to decrypt") from e
+                raise RuntimeError(
+                    "pip install cryptography required to decrypt"
+                ) from e
             logger.warning(
                 "Failed to load secrets key at %s: %s — encrypted files will be restored as .enc",
                 expanded_key_path,
                 e,
             )
             missing_key = True
-            errors.append({"relative_path": "<secrets-key>", "error": f"missing secrets key: {e}"})
+            errors.append(
+                {"relative_path": "<secrets-key>", "error": f"missing secrets key: {e}"}
+            )
 
     for relative_path, entry in sorted(manifest.entries.items()):
         if entry.pruned:
@@ -226,7 +256,12 @@ def restore_backup(
 
         is_encrypted = bool(getattr(entry, "encrypted", False))
         # Determine target path based on encryption and decrypt availability
-        if is_encrypted and wants_decrypt and not missing_key and decrypt_key is not None:
+        if (
+            is_encrypted
+            and wants_decrypt
+            and not missing_key
+            and decrypt_key is not None
+        ):
             target = Path(output_dir) / relative_path
         elif is_encrypted:
             # Decrypt disabled or key missing — keep .enc suffix
@@ -248,7 +283,12 @@ def restore_backup(
             continue
 
         # Encrypted + decrypt available: download to temp then decrypt
-        if is_encrypted and wants_decrypt and not missing_key and decrypt_key is not None:
+        if (
+            is_encrypted
+            and wants_decrypt
+            and not missing_key
+            and decrypt_key is not None
+        ):
             tmp_enc_path: str | None = None
             try:
                 # Download ciphertext to temp file
@@ -273,14 +313,16 @@ def restore_backup(
                     parts = relative_path.split("/")
                     # Any component is a secrets dir
                     if any(
-                        p in {".ssh", ".azure", ".gemini", ".android", ".aitk", ".cisco"}
+                        p
+                        in {".ssh", ".azure", ".gemini", ".android", ".aitk", ".cisco"}
                         for p in parts[:-1]
                     ):
                         try:
                             os.chmod(str(target), 0o600)
                         except OSError:
                             pass
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
+                # Intentionally broad: one file's failure must not abort the restore.
                 # Cleanup part file if exists
                 try:
                     os.unlink(part_path)
@@ -290,7 +332,10 @@ def restore_backup(
                 if "cryptography" in str(e).lower():
                     files_failed += 1
                     errors.append(
-                        {"relative_path": relative_path, "error": "pip install cryptography required to decrypt"}
+                        {
+                            "relative_path": relative_path,
+                            "error": "pip install cryptography required to decrypt",
+                        }
                     )
                     continue
                 # Decryption failure vs download failure
@@ -316,7 +361,8 @@ def restore_backup(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 drive.download_file(entry.drive_file_id, part_path)
                 os.replace(part_path, str(target))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
+                # Intentionally broad: one file's failure must not abort the restore.
                 try:
                     os.unlink(part_path)
                 except OSError:
@@ -345,7 +391,9 @@ def restore_backup(
         try:
             # _machine_state folder under profile
             ms_folder_id = drive.get_or_create_folder("_machine_state", root_id)
-            found_git = drive.find_file_by_name_and_parent("git_repos.json", ms_folder_id)
+            found_git = drive.find_file_by_name_and_parent(
+                "git_repos.json", ms_folder_id
+            )
             if found_git is not None:
                 fd, tmp_git_path = tempfile.mkstemp(suffix=".json")
                 os.close(fd)
@@ -354,7 +402,11 @@ def restore_backup(
                     with open(tmp_git_path, "r", encoding="utf-8") as f:
                         envelope = json.load(f)
                     # collector envelope is {schema_version, collector, collected_at, data}
-                    data = envelope.get("data") if isinstance(envelope, dict) and "data" in envelope else envelope
+                    data = (
+                        envelope.get("data")
+                        if isinstance(envelope, dict) and "data" in envelope
+                        else envelope
+                    )
                     if isinstance(data, dict) and "repos" in data:
                         repos = list(data["repos"])
                     elif isinstance(data, list):
@@ -366,7 +418,8 @@ def restore_backup(
                         os.unlink(tmp_git_path)
                     except OSError:
                         pass
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            # Intentionally broad: best effort; falls back to the local inventory.
             logger.warning("Failed to load git_repos inventory from Drive: %s", e)
         # Fallback local
         if not inventory_found:
@@ -375,32 +428,52 @@ def restore_backup(
                 try:
                     with open(local_path, "r", encoding="utf-8") as f:
                         envelope = json.load(f)
-                    data = envelope.get("data") if isinstance(envelope, dict) and "data" in envelope else envelope
+                    data = (
+                        envelope.get("data")
+                        if isinstance(envelope, dict) and "data" in envelope
+                        else envelope
+                    )
                     if isinstance(data, dict) and "repos" in data:
                         repos = list(data["repos"])
                     inventory_found = True
                     inventory_source = f"local:{local_path}"
-                except Exception as e:
-                    logger.warning("Failed to load local git_repos inventory %s: %s", local_path, e)
+                except (OSError, ValueError, TypeError) as e:
+                    logger.warning(
+                        "Failed to load local git_repos inventory %s: %s", local_path, e
+                    )
         if not inventory_found:
             msg = "git_repos inventory not found (no _machine_state/git_repos.json on Drive or locally)"
             logger.warning(msg)
             git_errors.append({"relative_path": "<git_repos.json>", "error": msg})
         else:
-            logger.info("Git repos inventory from %s: %d repos", inventory_source, len(repos))
+            logger.info(
+                "Git repos inventory from %s: %d repos", inventory_source, len(repos)
+            )
             git_repos_found = len(repos)
             for repo in repos:
                 rel = str(repo.get("relative_path", "")).strip()
                 remote_url = str(repo.get("remote_url", "")).strip()
                 has_github = bool(repo.get("has_github"))
-                has_remote = bool(repo.get("has_remote"))
                 if not rel or not _is_safe_relative_path(rel):
                     git_failed += 1
-                    git_errors.append({"relative_path": rel or "<unknown>", "error": "unsafe path in git_repos inventory"})
+                    git_errors.append(
+                        {
+                            "relative_path": rel or "<unknown>",
+                            "error": "unsafe path in git_repos inventory",
+                        }
+                    )
                     continue
-                if not has_github or not remote_url or "github.com" not in remote_url.lower():
+                if (
+                    not has_github
+                    or not remote_url
+                    or "github.com" not in remote_url.lower()
+                ):
                     git_skipped_no_remote += 1
-                    logger.info("Skipping %s: no GitHub remote (%s)", rel, remote_url or "no remote")
+                    logger.info(
+                        "Skipping %s: no GitHub remote (%s)",
+                        rel,
+                        remote_url or "no remote",
+                    )
                     continue
                 target = Path(output_dir) / rel
                 if (target / ".git").exists():
@@ -416,7 +489,9 @@ def restore_backup(
                     logger.info("Cloned %s -> %s", remote_url, target)
                 else:
                     git_failed += 1
-                    git_errors.append({"relative_path": rel, "error": err or "clone failed"})
+                    git_errors.append(
+                        {"relative_path": rel, "error": err or "clone failed"}
+                    )
                     logger.warning("Clone failed for %s (%s): %s", rel, remote_url, err)
         logger.info(
             "Git clone phase: %d found, %d cloned, %d existing, %d no-remote skipped, %d failed",
