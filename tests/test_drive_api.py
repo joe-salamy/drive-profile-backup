@@ -21,6 +21,11 @@ def _http_error(status: int) -> HttpError:
     return HttpError(response, b"{}")
 
 
+def _html_error(status: int) -> HttpError:
+    response = MagicMock(status=status, reason="Bad Request")
+    return HttpError(response, b'<html><title>Error 400 (Bad Request)!!1</title></html>')
+
+
 class TestRateLimiter:
     def test_first_call_does_not_wait(self) -> None:
         limiter = RateLimiter(writes_per_second=10.0)
@@ -117,6 +122,43 @@ class TestDriveAPI:
 
         execute.assert_called_once()
         assert ("test", "parent_id") not in api._folder_cache
+
+    def test_folder_lookup_retries_html_400_then_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json",
+            token_path="token.json",
+            max_retries=2,
+        )
+        mock_service = MagicMock()
+        execute = mock_service.files.return_value.list.return_value.execute
+        execute.side_effect = [
+            _html_error(400),
+            {"files": [{"id": "folder_123", "name": "test"}]},
+        ]
+        api._service = mock_service
+        api._rate_limiter = MagicMock()
+        monkeypatch.setattr("drive_backup.drive_api.time.sleep", MagicMock())
+
+        assert api.get_or_create_folder("test", "parent_id") == "folder_123"
+        assert execute.call_count == 2
+
+    def test_folder_lookup_does_not_retry_json_400(self) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json",
+            token_path="token.json",
+            max_retries=2,
+        )
+        mock_service = MagicMock()
+        execute = mock_service.files.return_value.list.return_value.execute
+        execute.side_effect = _http_error(400)
+        api._service = mock_service
+
+        with pytest.raises(HttpError):
+            api.get_or_create_folder("test", "parent_id")
+
+        execute.assert_called_once()
 
     def test_retry_loop_retries_ssl_read_timeout_then_succeeds(
         self, monkeypatch: pytest.MonkeyPatch

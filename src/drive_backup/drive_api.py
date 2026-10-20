@@ -27,11 +27,27 @@ def _escape_drive_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _is_html_error_body(error: Any) -> bool:
+    """Return whether an HttpError carries an HTML error page, not JSON."""
+    content = getattr(error, "content", b"")
+    if isinstance(content, bytes):
+        text = content.decode("utf-8", errors="ignore")
+    else:
+        text = str(content)
+    return "<html" in text.lower()
+
+
 def _is_retryable_http_error(error: Any) -> bool:
     """Return whether an HttpError should be retried."""
     status = getattr(getattr(error, "resp", None), "status", None)
     if status in (429, 500, 503):
         return True
+    if status == 400:
+        # A JSON 400 is a real client error (bad query) — fail fast. But
+        # Google's frontend occasionally answers a valid request with an
+        # HTML "Error 400" page (observed on files.list folder lookups);
+        # that is transient, so retry it.
+        return _is_html_error_body(error)
     if status == 403:
         try:
             content = getattr(error, "content", b"")
