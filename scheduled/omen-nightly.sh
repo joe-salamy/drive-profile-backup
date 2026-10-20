@@ -3,6 +3,11 @@
 # remind about unpushed work, then back up.
 
 source "$(dirname "$0")/lib.sh"
+stale_check 'Check `journalctl --user -u drive-backup-nightly` on omen, or run the backup by hand with:
+
+```sh
+~/Code/drive-profile-backup/scheduled/omen-nightly.sh
+```'
 
 SNAPSHOTS="$HOME/_snapshots"
 

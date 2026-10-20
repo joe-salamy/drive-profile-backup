@@ -11,7 +11,6 @@ source "$(dirname "$0")/lib.sh"
 MIN_STREAK=$((30 * 60))
 MAX_GAP=$((12 * 60)) # a missed tick or two is fine; longer means off/asleep
 START_HOUR=18
-STALE_AFTER=$((3 * 24 * 3600))
 
 now=$(date +%s)
 today=$(date +%F)
@@ -31,13 +30,11 @@ on_ac() {
 
 # Stale-backup nag, checked before any skip so it fires even if the
 # heuristic never lets a run through.
-last_success=$(cat "$STATE_DIR/last-success" 2>/dev/null || cat "$STATE_DIR/installed" 2>/dev/null || echo "$now")
-if ((now - last_success > STALE_AFTER)) && [[ $(cat "$STATE_DIR/stale-nag" 2>/dev/null) != "$today" ]]; then
-  echo "$today" >"$STATE_DIR/stale-nag"
-  printf '# No backup from %s in %s days\n\nThe evening backup needs the laptop on AC for 30+ minutes after 18:00. Run it by hand (no conditions) with:\n\n```sh\n~/Code/drive-profile-backup/scheduled/laptop-evening.sh\n```\n\nLast success: %s.\n' \
-    "$HOST" "$(((now - last_success) / 86400))" "$(date -d "@$last_success" '+%F %R')" |
-    notify "drive-backup" "No backup from $HOST in 3+ days"
-fi
+stale_check 'The evening backup needs the laptop on AC for 30+ minutes after 18:00. Run it by hand (no conditions) with:
+
+```sh
+~/Code/drive-profile-backup/scheduled/laptop-evening.sh
+```'
 
 streak_file="$STATE_DIR/ac-streak"
 if ! on_ac; then

@@ -39,6 +39,25 @@ deliver_local() {
   mv "$tmp" "$dir/$(date +%Y-%m-%dT%H%M%S)-$from.md"
 }
 
+STALE_AFTER=$((3 * 24 * 3600))
+
+# stale_check HOW_TO_RUN — send one inbox reminder a day when no backup has
+# succeeded in 3+ days. HOW_TO_RUN is per-host markdown telling how to run
+# the backup by hand. Call before any skip so it fires even when the backup
+# never starts; run_backup records success, which silences it.
+stale_check() {
+  local how_to_run=$1 now today last_success
+  now=$(date +%s)
+  today=$(date +%F)
+  last_success=$(cat "$STATE_DIR/last-success" 2>/dev/null || cat "$STATE_DIR/installed" 2>/dev/null || echo "$now")
+  if ((now - last_success > STALE_AFTER)) && [[ $(cat "$STATE_DIR/stale-nag" 2>/dev/null) != "$today" ]]; then
+    echo "$today" >"$STATE_DIR/stale-nag"
+    printf '# No backup from %s in %s days\n\n%s\n\nLast success: %s.\n' \
+      "$HOST" "$(((now - last_success) / 86400))" "$how_to_run" "$(date -d "@$last_success" '+%F %R')" |
+      notify "drive-backup" "No backup from $HOST in 3+ days"
+  fi
+}
+
 # repo_report [ROOT] — markdown list of repos with work not on any remote.
 # Uses local remote-tracking refs only (no fetch), so it never needs network.
 repo_report() {

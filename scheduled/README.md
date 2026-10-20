@@ -39,7 +39,9 @@ likely to stay on. The timer fires every 5 minutes all day, and
 
 Being interrupted is safe: `drive-backup` treats SIGTERM like Ctrl+C,
 checkpoints its manifest, and the next run resumes. If no backup has
-succeeded in 3 days, the gate sends one reminder a day.
+succeeded in 3 days, each host sends one reminder a day until a backup
+succeeds (the 3535 gate checks before any skip; OMEN checks at the start of
+its nightly run).
 
 The unit is capped at 2 CPU threads and runs at idle I/O priority, to keep
 the laptop cool.
@@ -59,7 +61,7 @@ What gets sent:
   lines of output.
 - **Backup failed on HOST**: any other non-zero exit.
 - **localfin snapshot failed on omen**.
-- **No backup from HOST in 3+ days** (3535 only).
+- **No backup from HOST in 3+ days**: each host watches its own last success, one reminder a day until a backup succeeds.
 
 ## OMEN specifics
 
