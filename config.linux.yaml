@@ -155,6 +155,9 @@ exclude_path_patterns:
   - ".local/share/**" # app data (flatpak, Steam, Trash, caches) — exceptions re-included below
   - ".local/go/*" # Go toolchain — re-downloadable
   - ".local/opt/*" # Locally built tools (llama.cpp) — rebuildable
+  - ".cargo/registry/*" # crate sources/index — re-downloadable
+  - ".cargo/git/*" # git-dependency checkouts — re-downloadable
+  - ".rustup/*" # Rust toolchains — re-downloadable
   - "*/harness-info/*.html" # Generated OMP reports and overviews
   - ".omp/*" # Keep OMP runtime state excluded except included session JSONL
   - ".var/app/*/cache/*" # Flatpak per-app caches
