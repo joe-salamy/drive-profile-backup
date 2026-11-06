@@ -63,8 +63,9 @@ Flags:
 
 - `--dry-run`: refresh local machine-state inventories, then scan and report without uploading or pruning. Combine with `--skip-machine-state` for a no-refresh preview. Report includes `files_encrypted_uploaded` / `total_size_encrypted_human` when secrets are present.
 - `--full`: ignore the manifest and upload every eligible file.
-- `--prune`: move stale Drive files to trash when their manifest entries no longer exist locally.
-- `--prune-excluded`: trash Drive copies of files that still exist locally but the current config no longer backs up (new exclusions, type limits, symlinks), and drop them from the manifest. A Drive folder is trashed whole when no tracked file under it is still kept; otherwise files go one by one. Files only on Drive, unreadable files, and files that grew past a size limit keep their copies, so it is safe on a profile folder shared with another OS. Report rows carry `reason: "excluded"`; trashed folders are listed in `pruned_folders`.
+- `--prune`: mark Drive files whose local file no longer exists as pruned in the manifest. `--prune-trash`: move them to trash instead and drop them from the manifest.
+- `--prune-excluded`: trash Drive copies of files that still exist locally but the current config no longer backs up (new exclusions, type limits, symlinks), and drop them from the manifest. Files only on Drive, unreadable files, and files that grew past a size limit keep their copies, so it is safe on a profile folder shared with another OS. Report rows carry `reason: "excluded"`.
+- Trash pruning (`--prune-trash`, `--prune-excluded`) trashes a Drive folder whole when no tracked file under it is still kept (paths compared case-insensitively, like Drive names); otherwise files go one by one. Trashed folders are listed in `pruned_folders`. Up to 8 Drive trash calls run at once.
 - `--verbose`: print per-file actions and DEBUG logs.
 - `--skip-machine-state`: do not refresh generated inventories. Existing snapshots remain eligible for ordinary scan, deduplication, and upload.
 - `--config PATH`: use this config file. Overrides `$DRIVE_BACKUP_CONFIG`.

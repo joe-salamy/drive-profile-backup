@@ -164,7 +164,7 @@ class PrunedFile:
 
 @dataclass
 class PrunedFolder:
-    """A Drive folder trashed whole because every file under it was excluded."""
+    """A Drive folder trashed whole because every tracked file under it went."""
 
     relative_path: str
     drive_folder_id: str

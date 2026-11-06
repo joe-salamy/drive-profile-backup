@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -67,6 +68,21 @@ class ManifestProgressError(RuntimeError):
 
 
 MANIFEST_CHECKPOINT_INTERVAL_SECONDS = 30.0
+# Concurrent Drive trash calls during prune. Each call is a ~1s round trip, so
+# serial pruning of tens of thousands of entries takes hours; retries with
+# backoff absorb Drive rate-limit responses.
+PRUNE_TRASH_WORKERS = 8
+
+
+@dataclass(frozen=True, slots=True)
+class _TrashJob:
+    """One Drive trash call: a whole folder or a single file."""
+
+    relative_path: str
+    drive_id: str
+    # Manifest keys dropped once the trash succeeds.
+    keys: tuple[str, ...]
+    is_folder: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1235,50 +1251,21 @@ class BackupEngine:
 
     def _prune_stale_manifest_entries(self) -> None:
         """Mark stale Drive files as pruned, or trash them in trash mode."""
-        include_pruned = self.prune_mode == "trash"
-        for relative_path, entry in self._stale_manifest_entries(
-            include_pruned=include_pruned
-        ):
+        if self.prune_mode == "trash":
+            self._trash_manifest_entries(
+                dict(self._stale_manifest_entries(include_pruned=True)),
+                reason="missing",
+            )
+            return
+        for relative_path, entry in self._stale_manifest_entries(include_pruned=False):
             if not entry.drive_file_id:
-                self.stats.files_prune_failed += 1
-                self.stats.prune_error_files.append(
-                    PruneError(
-                        relative_path=relative_path,
-                        drive_file_id=entry.drive_file_id,
-                        error="missing Drive file ID",
-                    )
+                self._record_prune_error(
+                    relative_path, entry.drive_file_id, "missing Drive file ID"
                 )
                 continue
-
-            if self.dry_run:
-                self._record_pruned_file(relative_path, entry)
-                continue
-
-            if self.prune_mode == "flag":
+            if not self.dry_run:
                 entry.pruned = True
                 self._manifest_dirty = True
-                self._record_pruned_file(relative_path, entry)
-                continue
-
-            try:
-                self._trash_drive_item(entry.drive_file_id)
-            except Exception as e:  # noqa: BLE001
-                # Intentionally broad: one prune failure must not abort pruning.
-                logger.error("Failed to prune %s: %s", relative_path, e)
-                self.stats.files_prune_failed += 1
-                self.stats.prune_error_files.append(
-                    PruneError(
-                        relative_path=relative_path,
-                        drive_file_id=entry.drive_file_id,
-                        error=str(e),
-                    )
-                )
-                continue
-            # Throttled checkpoint: a crash loses at most one interval of
-            # removals, and re-trashing those next run is idempotent.
-            self.manifest.remove(relative_path)
-            self._manifest_dirty = True
-            self._maybe_save_manifest_progress()
             self._record_pruned_file(relative_path, entry)
 
     def _note_scanned(self, file: FileEntry) -> None:
@@ -1326,35 +1313,42 @@ class BackupEngine:
             and self._manifest_key_exists_locally(rel_path)
         }
 
-    def _group_excluded_by_folder(
-        self, excluded: dict[str, ManifestEntry]
+    def _group_by_trashable_folder(
+        self, targets: dict[str, ManifestEntry]
     ) -> tuple[dict[str, str], dict[str, list[str]], list[str]]:
         """Pick Drive folders that can be trashed whole.
 
-        A folder qualifies when no manifest entry under it is still backed up
-        (or still kept on Drive for a file that exists only there, like the
-        Windows-only files in a reused profile folder). Each excluded file goes
-        to its shallowest qualifying ancestor whose Drive ID is known; the rest
-        are trashed one by one.
+        A folder qualifies when no manifest entry under it is still kept on
+        Drive (backed up, or kept for a file that exists only there, like the
+        Windows-only files in a reused profile folder). Drive matches names
+        case-insensitively, so a kept path differing only in case (and any
+        kept file filed under the same Drive folder ID) also blocks it. Each
+        target goes to its shallowest qualifying ancestor whose Drive ID is
+        known; the rest are trashed one by one.
 
         Returns (folder path -> Drive ID, folder path -> manifest keys to drop,
         keys to trash individually).
         """
         keep_dirs: set[str] = set()
+        kept_parent_ids: set[str] = set()
         folder_ids: dict[str, str] = {}
         for rel_path, entry in self.manifest.entries.items():
-            parent = os.path.dirname(rel_path)
-            if rel_path in excluded or entry.pruned:
+            if rel_path in targets or entry.pruned:
+                parent = os.path.dirname(rel_path)
                 if parent and entry.drive_parent_id:
                     folder_ids.setdefault(parent, entry.drive_parent_id)
                 continue
+            kept_parent_ids.add(entry.drive_parent_id)
+            parent = os.path.dirname(rel_path.casefold())
             while parent and parent not in keep_dirs:
                 keep_dirs.add(parent)
                 parent = os.path.dirname(parent)
         folder_ids = {
             path: folder_id
             for path, folder_id in folder_ids.items()
-            if path not in keep_dirs and folder_id != self._root_folder_id
+            if path.casefold() not in keep_dirs
+            and folder_id not in kept_parent_ids
+            and folder_id != self._root_folder_id
         }
 
         def folder_for(rel_path: str) -> str | None:
@@ -1367,7 +1361,7 @@ class BackupEngine:
 
         folders: dict[str, list[str]] = {}
         singles: list[str] = []
-        for rel_path in sorted(excluded):
+        for rel_path in sorted(targets):
             folder = folder_for(rel_path)
             if folder is None:
                 singles.append(rel_path)
@@ -1375,16 +1369,16 @@ class BackupEngine:
                 folders.setdefault(folder, []).append(rel_path)
         # Flag-pruned history copies under a trashed folder go with it.
         for rel_path, entry in self.manifest.entries.items():
-            if entry.pruned:
+            if entry.pruned and rel_path not in targets:
                 folder = folder_for(rel_path)
                 if folder in folders:
                     folders[folder].append(rel_path)
         return {path: folder_ids[path] for path in folders}, folders, singles
 
-    def _record_excluded_prune_error(
+    def _record_prune_error(
         self, relative_path: str, drive_id: str, error: str
     ) -> None:
-        logger.error("Failed to prune excluded %s: %s", relative_path, error)
+        logger.error("Failed to prune %s: %s", relative_path, error)
         self.stats.files_prune_failed += 1
         self.stats.prune_error_files.append(
             PruneError(relative_path=relative_path, drive_file_id=drive_id, error=error)
@@ -1399,58 +1393,83 @@ class BackupEngine:
             if not _is_not_found_error(exc):
                 raise
 
+    def _try_trash_drive_item(self, drive_id: str) -> Exception | None:
+        """Trash a Drive item on a worker thread; return the failure, if any."""
+        try:
+            self._trash_drive_item(drive_id)
+        except Exception as exc:  # noqa: BLE001
+            # Intentionally broad: one failure must not abort pruning.
+            return exc
+        return None
+
     def _prune_excluded_manifest_entries(self) -> None:
         """Trash Drive copies of local files the current config excludes."""
-        excluded = self._excluded_manifest_entries()
-        if not excluded:
+        self._trash_manifest_entries(
+            self._excluded_manifest_entries(), reason="excluded"
+        )
+
+    def _trash_manifest_entries(
+        self, targets: dict[str, ManifestEntry], *, reason: str
+    ) -> None:
+        """Trash targets' Drive copies, whole folders when possible.
+
+        Drive calls run PRUNE_TRASH_WORKERS at a time; outcomes are applied to
+        the manifest and stats on this thread in job order.
+        """
+        if not targets:
             return
-        folder_ids, folders, singles = self._group_excluded_by_folder(excluded)
-
-        for folder in sorted(folders):
-            keys = folders[folder]
-            if not self.dry_run:
-                try:
-                    self._trash_drive_item(folder_ids[folder])
-                except Exception as exc:  # noqa: BLE001
-                    # Intentionally broad: one failure must not abort pruning.
-                    self._record_excluded_prune_error(
-                        f"{folder}/", folder_ids[folder], str(exc)
-                    )
-                    continue
-            self.stats.pruned_folders.append(
-                PrunedFolder(
-                    relative_path=folder,
-                    drive_folder_id=folder_ids[folder],
-                    files=sum(key in excluded for key in keys),
-                )
-            )
-            for key in keys:
-                if key in excluded:
-                    self._record_pruned_file(key, excluded[key], reason="excluded")
-                if not self.dry_run:
-                    self.manifest.remove(key)
-            if not self.dry_run:
-                self._manifest_dirty = True
-                self._maybe_save_manifest_progress()
-
+        folder_ids, folders, singles = self._group_by_trashable_folder(targets)
+        jobs = [
+            _TrashJob(folder, folder_ids[folder], tuple(folders[folder]), True)
+            for folder in sorted(folders)
+        ]
         for key in singles:
-            entry = excluded[key]
-            if not entry.drive_file_id:
-                self._record_excluded_prune_error(key, "", "missing Drive file ID")
-                continue
-            if not self.dry_run:
-                try:
-                    self._trash_drive_item(entry.drive_file_id)
-                except Exception as exc:  # noqa: BLE001
-                    # Intentionally broad: one failure must not abort pruning.
-                    self._record_excluded_prune_error(
-                        key, entry.drive_file_id, str(exc)
+            drive_id = targets[key].drive_file_id
+            if drive_id:
+                jobs.append(_TrashJob(key, drive_id, (key,), False))
+            else:
+                self._record_prune_error(key, "", "missing Drive file ID")
+
+        executor: ThreadPoolExecutor | None = None
+        try:
+            outcomes: Iterable[Exception | None]
+            if self.dry_run:
+                outcomes = itertools.repeat(None)
+            else:
+                executor = ThreadPoolExecutor(max_workers=PRUNE_TRASH_WORKERS)
+                outcomes = executor.map(
+                    self._try_trash_drive_item, [job.drive_id for job in jobs]
+                )
+            for job, error in zip(jobs, outcomes):
+                if error is not None:
+                    label = (
+                        f"{job.relative_path}/" if job.is_folder else job.relative_path
                     )
+                    self._record_prune_error(label, job.drive_id, str(error))
                     continue
-                self.manifest.remove(key)
-                self._manifest_dirty = True
-                self._maybe_save_manifest_progress()
-            self._record_pruned_file(key, entry, reason="excluded")
+                if job.is_folder:
+                    self.stats.pruned_folders.append(
+                        PrunedFolder(
+                            relative_path=job.relative_path,
+                            drive_folder_id=job.drive_id,
+                            files=sum(key in targets for key in job.keys),
+                        )
+                    )
+                for key in job.keys:
+                    if key in targets:
+                        self._record_pruned_file(key, targets[key], reason=reason)
+                    if not self.dry_run:
+                        self.manifest.remove(key)
+                if not self.dry_run:
+                    # Throttled checkpoint: a crash loses at most one interval
+                    # of removals, and re-trashing those next run is idempotent.
+                    self._manifest_dirty = True
+                    self._maybe_save_manifest_progress()
+        finally:
+            if executor is not None:
+                # Ctrl-C or a failed checkpoint: drop queued calls, finish the
+                # in-flight ones.
+                executor.shutdown(wait=True, cancel_futures=True)
 
 
 def _format_mtime(mtime: float) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import MagicMock
@@ -1106,7 +1107,7 @@ class TestBackupEnginePrune:
         manifest_path = state_dir / "manifest.json"
         manifest = Manifest()
         manifest.set(
-            relative_path="old/file.txt",
+            relative_path="old.txt",
             md5="abc",
             size=10,
             mtime=1.0,
@@ -1134,7 +1135,7 @@ class TestBackupEnginePrune:
 
         assert fake_drive.trash_calls == ["drive_old"]
         assert report["files_pruned"] == 1
-        assert Manifest.load(str(manifest_path)).get("old/file.txt") is None
+        assert Manifest.load(str(manifest_path)).get("old.txt") is None
 
     def test_prune_skips_when_backup_root_is_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1784,11 +1785,13 @@ class TestBackupEnginePruneExcluded:
         manifest: Manifest,
         *,
         dry_run: bool = False,
+        prune_trash: bool = False,
+        drive: _PruneExcludedDrive | None = None,
         **config_overrides: object,
     ) -> tuple[_PruneExcludedDrive, Manifest, BackupReport]:
         manifest_path = tmp_path / "state" / "manifest.json"
         manifest.save(str(manifest_path))
-        drive = _PruneExcludedDrive()
+        drive = drive or _PruneExcludedDrive()
         monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: drive)
         options: dict[str, object] = {
             "exclude_dirs": [],
@@ -1805,7 +1808,9 @@ class TestBackupEnginePruneExcluded:
         report = BackupEngine(
             config,
             dry_run=dry_run,
-            prune_excluded=True,
+            prune=prune_trash,
+            prune_mode="trash" if prune_trash else "flag",
+            prune_excluded=not prune_trash,
             collect_machine_state_snapshot=False,
         ).run()
         return drive, Manifest.load(str(manifest_path)), report
@@ -1911,6 +1916,73 @@ class TestBackupEnginePruneExcluded:
         assert set(saved.entries) == {"target/app.bin"}
         assert report["files_pruned"] == 1
         assert report["pruned_folders"][0]["drive_folder_id"] == "target_folder"
+
+    def test_deleted_tree_is_trashed_as_one_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        write_tree(home, {"keep/notes.txt": "keep"})
+        manifest = Manifest()
+        self._track(manifest, home, "keep/notes.txt", "keep_folder")
+        self._track(manifest, home, "gone/a.txt", "gone_folder")
+        self._track(manifest, home, "gone/sub/b.txt", "sub_folder")
+        self._track(manifest, home, "stray.txt", "root")
+
+        drive, saved, report = self._run(
+            tmp_path, monkeypatch, manifest, prune_trash=True
+        )
+
+        assert sorted(drive.trash_calls) == ["gone_folder", "id:stray.txt"]
+        assert set(saved.entries) == {"keep/notes.txt"}
+        assert report["pruned_folders"] == [
+            {"relative_path": "gone", "drive_folder_id": "gone_folder", "files": 2}
+        ]
+        assert report["files_pruned"] == 3
+        assert {row["reason"] for row in report["pruned_files"]} == {"missing"}
+
+    def test_kept_file_in_same_drive_folder_blocks_folder_trash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        write_tree(home, {"Civ Pro/sub/new.txt": "keep", "b/new.txt": "keep"})
+        manifest = Manifest()
+        # Drive names are case-insensitive: "Civ pro" and "Civ Pro" are one folder.
+        self._track(manifest, home, "Civ pro/old.txt", "civ_folder")
+        self._track(manifest, home, "Civ Pro/sub/new.txt", "civ_sub_folder")
+        # Different local paths that were filed under the same Drive folder.
+        self._track(manifest, home, "a/old.txt", "shared_folder")
+        self._track(manifest, home, "b/new.txt", "shared_folder")
+
+        drive, saved, report = self._run(
+            tmp_path, monkeypatch, manifest, prune_trash=True
+        )
+
+        assert sorted(drive.trash_calls) == ["id:Civ pro/old.txt", "id:a/old.txt"]
+        assert set(saved.entries) == {"Civ Pro/sub/new.txt", "b/new.txt"}
+        assert report["pruned_folders"] == []
+
+    def test_trash_calls_run_concurrently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        barrier = threading.Barrier(2, timeout=5)
+
+        class BarrierDrive(_PruneExcludedDrive):
+            def trash_file(self, file_id: str) -> dict[str, str]:
+                barrier.wait()  # breaks (prune failure) if calls run serially
+                return super().trash_file(file_id)
+
+        home = tmp_path / "home"
+        home.mkdir()
+        manifest = Manifest()
+        self._track(manifest, home, "one.txt", "root")
+        self._track(manifest, home, "two.txt", "root")
+
+        drive, _, report = self._run(
+            tmp_path, monkeypatch, manifest, prune_trash=True, drive=BarrierDrive()
+        )
+
+        assert report["files_prune_failed"] == 0
+        assert sorted(drive.trash_calls) == ["id:one.txt", "id:two.txt"]
 
 
 class TestBackupEngineEncryptionSwitch:
