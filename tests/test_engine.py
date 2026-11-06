@@ -1557,7 +1557,7 @@ class TestBackupEngineManifestSnapshot:
         )
         manifest.save(str(manifest_path))
 
-        upload_calls: list[tuple[str, str]] = []
+        upload_calls: list[tuple[str, str, bool]] = []
 
         class FakeDrive:
             def authenticate(self) -> None:
@@ -1576,7 +1576,7 @@ class TestBackupEngineManifestSnapshot:
             def upload_file(
                 self, local_path: str, parent_id: str, resumable: bool = False
             ) -> dict[str, str]:
-                upload_calls.append((local_path, parent_id))
+                upload_calls.append((local_path, parent_id, resumable))
                 return {"id": "uploaded_id", "md5Checksum": "md5"}
 
             def update_file(
@@ -1592,7 +1592,8 @@ class TestBackupEngineManifestSnapshot:
         ).run()
 
         assert report["manifest_snapshot_uploaded"] is True
-        assert (str(manifest_path), "_meta_id") in upload_calls
+        # Resumable: Drive rejects single-request uploads above 5 MB.
+        assert (str(manifest_path), "_meta_id", True) in upload_calls
 
     def test_upload_updates_existing_snapshot(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1603,7 +1604,7 @@ class TestBackupEngineManifestSnapshot:
         state_dir.mkdir()
         manifest_path = state_dir / "manifest.json"
         Manifest().save(str(manifest_path))
-        update_calls: list[str] = []
+        update_calls: list[tuple[str, bool]] = []
 
         class FakeDrive:
             def authenticate(self) -> None:
@@ -1627,7 +1628,7 @@ class TestBackupEngineManifestSnapshot:
             def update_file(
                 self, file_id: str, local_path: str, resumable: bool = False
             ) -> dict[str, str]:
-                update_calls.append(file_id)
+                update_calls.append((file_id, resumable))
                 return {"id": file_id, "md5Checksum": "md5"}
 
         monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: FakeDrive())
@@ -1638,7 +1639,7 @@ class TestBackupEngineManifestSnapshot:
         ).run()
 
         assert report["manifest_snapshot_uploaded"] is True
-        assert update_calls == ["snapshot_id"]
+        assert update_calls == [("snapshot_id", True)]
 
     def test_upload_failure_is_non_fatal(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

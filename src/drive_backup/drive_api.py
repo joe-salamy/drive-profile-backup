@@ -19,6 +19,9 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 # MIME type for Google Drive folders
 FOLDER_MIME = "application/vnd.google-apps.folder"
+# Resumable upload chunk: each chunk is its own request that resumes from the
+# server's acknowledged offset, so one stalled socket costs 16 MB, not the file.
+RESUMABLE_CHUNK_SIZE = 16 * 1024 * 1024
 T = TypeVar("T")
 
 
@@ -300,6 +303,7 @@ class DriveAPI:
 
         media = MediaFileUpload(
             local_path,
+            chunksize=RESUMABLE_CHUNK_SIZE,
             resumable=resumable,
         )
 
@@ -332,6 +336,7 @@ class DriveAPI:
 
         media = MediaFileUpload(
             local_path,
+            chunksize=RESUMABLE_CHUNK_SIZE,
             resumable=resumable,
         )
 
@@ -405,7 +410,9 @@ class DriveAPI:
         """Execute a resumable upload with progress tracking."""
         response: dict[str, Any] | None = None
         while response is None:
-            status, response = request.next_chunk()
+            # num_retries keeps a stalled chunk resuming from the server's
+            # offset instead of restarting the whole file.
+            status, response = request.next_chunk(num_retries=self._max_retries)
             if status:
                 logger.debug("Upload progress: %.0f%%", status.progress() * 100)
         return response

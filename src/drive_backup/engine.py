@@ -752,10 +752,16 @@ class BackupEngine:
         try:
             meta_id = self.drive.get_or_create_folder("_meta", self._root_folder_id)
             found = self.drive.find_file_by_name_and_parent("manifest.json", meta_id)
+            # Resumable: the manifest runs to hundreds of MB, and Drive only
+            # accepts single-request media uploads up to 5 MB.
             if found is not None:
-                self.drive.update_file(found["id"], self.config.manifest_path)
+                self.drive.update_file(
+                    found["id"], self.config.manifest_path, resumable=True
+                )
             else:
-                self.drive.upload_file(self.config.manifest_path, meta_id)
+                self.drive.upload_file(
+                    self.config.manifest_path, meta_id, resumable=True
+                )
             self.stats.manifest_snapshot_uploaded = True
         except Exception as e:  # noqa: BLE001
             # Intentionally broad: snapshot upload is best effort.

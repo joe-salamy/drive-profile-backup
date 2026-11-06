@@ -407,6 +407,22 @@ class TestDriveAPI:
         )
         api._rate_limiter.wait.assert_called_once()
 
+    def test_resumable_upload_retries_stalled_chunks(self) -> None:
+        api = DriveAPI(
+            credentials_path="creds.json", token_path="token.json", max_retries=3
+        )
+        request = MagicMock()
+        progress = MagicMock()
+        request.next_chunk.side_effect = [(progress, None), (None, {"id": "f"})]
+
+        assert api._resumable_execute(request) == {"id": "f"}
+
+        # Every chunk resumes with the configured retry budget instead of
+        # restarting the upload.
+        assert [
+            call.kwargs["num_retries"] for call in request.next_chunk.call_args_list
+        ] == [3, 3]
+
     def test_download_file_writes_media_bytes_not_metadata(
         self, tmp_path: Path
     ) -> None:
