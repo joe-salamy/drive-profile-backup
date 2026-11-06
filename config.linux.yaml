@@ -11,6 +11,8 @@
 # skips them by MD5. The folder also keeps ~31k Windows-only files.
 # NEVER run --prune/--prune-trash on this profile: every Windows-only file
 # would look stale and be trashed.
+# --prune-excluded IS safe here: it only trashes Drive copies of files that
+# exist locally and are now excluded, and keeps folders holding Windows files.
 
 # Blank means the current user's home directory (/home/joesa here).
 backup_root: ""
@@ -75,6 +77,7 @@ exclude_dirs:
   - ".azure" # Cached Azure credentials and tool state — encrypted, never plain
   - ".cisco" # Generated VPN logs
   - "snap" # Snap package revisions — re-downloaded by snapd
+  - ".steam" # 3.8G Steam runtime; userdata is 112K and Steam Cloud keeps saves
   - "node24" # 205M standalone Node — re-downloadable
   - ".grip" # 2.4M grip cache — re-downloadable
   - ".npm-global" # 444K npm global prefix — re-downloadable
@@ -136,6 +139,8 @@ exclude_files:
   - "key4.db" # NSS key store; with logins.json it unlocks saved passwords
   - "logins*" # Firefox saved passwords (logins.json, logins.db, logins-backup.json)
   - "*.keyring" # GNOME keyring files
+  - ".tmpkeyring*" # GNOME keyring temp files (Bitwarden flatpak)
+  - "*cookies*.json" # Exported login cookies (Law School .omp/state/panopto-cookies.json)
   # Noise. These are file-name rules because include_path_patterns (.local/bin/**)
   # override path exclusions but not file-name exclusions.
   - "chezmoi" # 39M binary in .local/bin — re-downloadable
@@ -175,6 +180,16 @@ exclude_path_patterns:
   - ".mozilla/firefox/*/security_state/*" # Downloaded revocation data
   - ".mozilla/firefox/*/suggest.sqlite*" # Downloaded suggestion index
   - ".mozilla/firefox/*/domain_to_categories.sqlite*" # Downloaded category data
+  - ".mozilla/firefox/*/synced-tabs.db*" # Firefox Sync cache, rewritten every run
+  - ".mozilla/firefox/*/favicons.sqlite*" # Icon cache
+  - ".mozilla/firefox/*/extensions/*" # Add-ons — re-downloadable
+  - ".mozilla/firefox/*/gmp-*" # Widevine/OpenH264 plugins — re-downloadable
+  - ".config/google-chrome/*" # ~390M caches/model stores; Chrome isn't the main browser
+  - ".local/state/**" # Pipewire, scheduler and app state/logs
+  - ".cargo/bin/*" # cargo install binaries (joe-pdf, 31M) — rebuildable
+  - "Code/*/target/*" # Rust build output (joe-pdf/target, 7G)
+  - "Music/Samples/SalamanderGrandPianoV3_48khz24bit/*" # 1.9G downloadable sample library
+  - "Documents/Piano Videos/sessions/*/output/*" # Rendered clips, regenerated from each session's input/
 
 # Explicitly preserved paths inside otherwise-excluded trees (.omp, .local).
 include_path_patterns:

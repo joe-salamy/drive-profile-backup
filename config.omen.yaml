@@ -74,6 +74,7 @@ exclude_dirs:
   - "node24" # 205M standalone Node — re-downloadable
   - ".grip" # 2.4M grip cache — re-downloadable
   - ".npm-global" # 444K npm global prefix — re-downloadable
+  - ".nv" # NVIDIA shader ComputeCache (1.1G) — regenerated on demand
 
 # File name patterns to exclude (supports wildcards).
 # Secret patterns (.env, *.pem, *.key, credentials.json, ...) are ENCRYPTED
@@ -110,12 +111,20 @@ exclude_files:
   - ".netrc"
   - ".git-credentials"
   - ".pypirc"
+  # Also encrypted: *.env and secrets.toml (fella-fund's Gmail app password).
   # Also encrypted: everything under .ssh, .azure, .cisco, gh (GitHub CLI token), .gnupg.
   - ".lesshst" # Interactive command history
   - ".node_repl_history" # Interactive command history
   - "*(MERGED, BAD).*" # Known-bad generated lecture copies across formats
   - "TEST *.m4a" # Generated lecture test encodes
   - "*TRIM TEST*.m4a" # Generated lecture trim-test copies
+  # Installed tool binaries in .local/bin — re-downloadable; joe-pdf is built from Code/joe-pdf.
+  - "chezmoi"
+  - "uv"
+  - "glow"
+  - "micro"
+  - "starship"
+  - "joe-pdf"
 
 # Path patterns to exclude (matched against relative path using wildcards)
 exclude_path_patterns:
@@ -123,7 +132,7 @@ exclude_path_patterns:
   - ".comfy-vault/*" # ComfyUI gocryptfs vault ciphertext: private, never uploaded
   - ".omp-private/*" # omp-private gocryptfs vault, unlocked view (priv-on): throwaway scratch, never uploaded
   - ".omp-vault/*" # omp-private gocryptfs vault ciphertext: private, never uploaded
-  - "ComfyUI/temp/*" # ComfyUI scratch/preview images (ComfyUI/{output,input,user} are backed up)
+  - "ComfyUI/*" # Upstream ComfyUI clone; only output/input/user/custom_nodes are re-included below
   - ".local/lib/**" # pip user site-packages — re-downloadable
   - ".local/share/**" # app data (flatpak, Steam, Trash, caches) — exceptions re-included below
   - ".local/go/*" # Go toolchain — re-downloadable
@@ -143,6 +152,12 @@ exclude_path_patterns:
   - "Downloads/*" # filemorph/oln exchange mirror; the 3535 is the source of truth
   - "Code/localfin-ai/data/budget.db*" # live WAL database; omen-nightly.sh snapshots it to _snapshots/
   - "Code/autotrader/data/kalshi/**" # Live trading dataset, rewritten by the collector/compactor mid-backup (vanished-file + SSL read-timeout noise); re-fetchable, never a stable source of truth
+  - "Code/autotrader/data/executor.db*" # live WAL database; omen-nightly.sh snapshots it to _snapshots/
+  - "Code/autotrader/ledger/ops/nightly-*.jsonl" # Nightly agent run logs (~20M/day, gitignored); curated results live in the rest of ledger/
+  - "Code/hand-weights/data/raw/*" # Public EDRM Enron/TREC corpus (686k files); sources in data/README.md
+  - "Code/*/target/*" # Rust build output (joe-pdf/target)
+  - ".cargo/bin/*" # cargo install binaries — rebuildable
+  - ".claude/plugins/*" # Plugin marketplace clones — re-downloadable
 
 # Explicitly preserved paths inside otherwise-excluded trees (.omp, .local).
 # "*" also matches "/", so "dir/*.ext" matches at any depth below dir.
@@ -157,6 +172,10 @@ include_path_patterns:
   - ".omp/scripts/**" # Requested: future scripts
   - ".local/bin/**" # User scripts — re-included through the pruned .local tree
   - ".local/share/applications/**" # Custom .desktop entries
+  - "ComfyUI/output/**" # Generated images
+  - "ComfyUI/input/**" # Uploaded inputs
+  - "ComfyUI/user/**" # Workflows and settings
+  - "ComfyUI/custom_nodes/**" # Installed custom nodes
 
 # Specific files to exclude (exact relative paths, forward slashes).
 # The Windows-era list was dropped 2026-09-28: none of those files exist here.

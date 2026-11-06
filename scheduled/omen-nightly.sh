@@ -32,12 +32,20 @@ os.replace(tmp, dest)
 PY
 }
 
-if ! err=$(snapshot_sqlite "$HOME/Code/localfin-ai/data/budget.db" \
-  "$SNAPSHOTS/localfin-ai/budget.db" 2>&1); then
-  log "localfin snapshot failed: $err"
-  printf '# localfin snapshot failed on %s\n\n```text\n%s\n```\n\nThe backup still ran, but it holds the previous snapshot of budget.db.\n' \
-    "$HOST" "$err" | notify "drive-backup" "localfin snapshot failed on $HOST"
-fi
+# snapshot NAME SRC DEST — snapshot_sqlite, reporting a failure to the inbox.
+snapshot() {
+  local name=$1 err
+  if ! err=$(snapshot_sqlite "$2" "$3" 2>&1); then
+    log "$name snapshot failed: $err"
+    printf '# %s snapshot failed on %s\n\n```text\n%s\n```\n\nThe backup still ran, but it holds the previous snapshot of %s.\n' \
+      "$name" "$HOST" "$err" "$(basename "$2")" | notify "drive-backup" "$name snapshot failed on $HOST"
+  fi
+}
+
+snapshot localfin "$HOME/Code/localfin-ai/data/budget.db" \
+  "$SNAPSHOTS/localfin-ai/budget.db"
+snapshot autotrader "$HOME/Code/autotrader/data/executor.db" \
+  "$SNAPSHOTS/autotrader/executor.db"
 
 repo_check
 run_backup "$REPO/config.omen.yaml" drive-backup-nightly.service

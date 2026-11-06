@@ -60,16 +60,18 @@ What gets sent:
   prunes, or the manifest snapshot failed). The message includes the last 60
   lines of output.
 - **Backup failed on HOST**: any other non-zero exit.
-- **localfin snapshot failed on omen**.
+- **localfin snapshot failed on omen** / **autotrader snapshot failed on omen**.
 - **No backup from HOST in 3+ days**: each host watches its own last success, one reminder a day until a backup succeeds.
 
 ## OMEN specifics
 
-`localfin-ai/data/budget.db` exists only on OMEN and is a live WAL database.
-`omen-nightly.sh` copies it with SQLite's backup API to
-`~/_snapshots/localfin-ai/budget.db`, and `config.omen.yaml` excludes the live
-file. `Documents/` and `Downloads/` are excluded because they mirror the
-3535's copies, and `models/` because model weights can be downloaded again.
+`omen-nightly.sh` copies live WAL databases with SQLite's backup API into
+`~/_snapshots/`, and `config.omen.yaml` excludes the live files:
+`autotrader/data/executor.db` (written all day by the executor service) and
+`localfin-ai/data/budget.db`. OMEN's localfin checkout is dev-only, so that
+snapshot is usually empty; the live budget.db is on the 3535 and is backed up
+there directly. `Documents/` and `Downloads/` are excluded because they mirror
+the 3535's copies, and `models/` because model weights can be downloaded again.
 
 ## Operating
 
