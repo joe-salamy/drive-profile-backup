@@ -181,6 +181,20 @@ include_path_patterns:
 # The Windows-era list was dropped 2026-09-28: none of those files exist here.
 exclude_specific_files: []
 
+# Drive files deleted from this machine that must stay on Drive through
+# --prune / --prune-trash / --prune-excluded (manifest paths, "*" spans "/").
+# Protect only what has no other copy: generated ComfyUI renders and
+# hand-written shell config. Kalshi API keys and omp history stay prunable.
+prune_protected_paths:
+  - "ComfyUI/output/studio/20261014-*" # Render batch, 2026-10-14
+  - "ComfyUI/output/studio/20261015-*" # Render batch, 2026-10-15
+  - ".bashrc" # Deleted shell rc; last copy
+  - ".bashrc.bak-20260923191338"
+  - ".config/fish/functions/csvinbox.fish"
+  - ".config/fish/functions/lawtodo.fish"
+  - ".config/fish/functions/piano-print.fish"
+  - ".config/fish/conf.d/atuin.env.fish"
+
 # Skip symlinks and NTFS junction points (prevents infinite loops)
 exclude_symlinks: true
 

@@ -872,11 +872,12 @@ class TestBackupEngineUploadErrors:
         engine.drive = mock_drive
         saves: list[int] = []
         real_save = Manifest.save
-        monkeypatch.setattr(
-            Manifest,
-            "save",
-            lambda self, path: (saves.append(len(self.entries)), real_save(self, path)),
-        )
+
+        def tracking_save(manifest_obj: Manifest, path: str) -> None:
+            saves.append(len(manifest_obj.entries))
+            real_save(manifest_obj, path)
+
+        monkeypatch.setattr(Manifest, "save", tracking_save)
 
         engine._prune_stale_manifest_entries()
 
@@ -886,6 +887,53 @@ class TestBackupEngineUploadErrors:
         engine._maybe_save_manifest_progress(force=True)
         assert saves == [0]
         assert Manifest.load(str(manifest_path)).entries == {}
+
+    def test_prune_protected_paths_are_kept_in_trash_mode(self, tmp_path: Path) -> None:
+        backup_root = tmp_path / "backup"
+        state_dir = tmp_path / "state"
+        backup_root.mkdir()
+        state_dir.mkdir()
+        manifest_path = state_dir / "manifest.json"
+        manifest = Manifest()
+        for name in ("old/keep.txt", "old/stale.txt", "second/keep.txt"):
+            manifest.set(
+                relative_path=name,
+                md5="abc",
+                size=10,
+                mtime=1.0,
+                drive_file_id=f"drive_{name}",
+                drive_parent_id="parent",
+            )
+        manifest.save(str(manifest_path))
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(backup_root),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+            prune_protected_paths=["old/keep*"],
+        )
+        engine = BackupEngine(
+            config,
+            dry_run=False,
+            prune=True,
+            prune_mode="trash",
+            collect_machine_state_snapshot=False,
+        )
+        engine.manifest = Manifest.load(str(manifest_path))
+        mock_drive = MagicMock()
+        mock_drive.trash_file.return_value = {"id": "trashed"}
+        engine.drive = mock_drive
+
+        engine._prune_stale_manifest_entries()
+
+        assert [row.relative_path for row in engine.stats.pruned_files] == [
+            "old/stale.txt",
+            "second/keep.txt",
+        ]
+        assert set(engine.manifest.entries) == {"old/keep.txt"}
+        engine._maybe_save_manifest_progress(force=True)
+        assert set(Manifest.load(str(manifest_path)).entries) == {"old/keep.txt"}
 
     def test_manifest_progress_save_failure_aborts_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

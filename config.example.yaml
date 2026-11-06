@@ -89,6 +89,12 @@ include_path_patterns:
 # Specific files to exclude (exact relative paths, forward slashes)
 exclude_specific_files: []
 
+# Drive files to keep even when their local copies are gone: --prune,
+# --prune-trash and --prune-excluded skip these manifest paths (glob, matched
+# like exclude_path_patterns where "*" also spans "/"). Guarding prune only —
+# hidden deleted files return to the backup as soon as they exist locally.
+prune_protected_paths: []
+
 # Skip symlinks and NTFS junction points (prevents infinite loops)
 exclude_symlinks: true
 

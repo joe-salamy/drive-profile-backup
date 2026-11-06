@@ -130,6 +130,7 @@ class Config:
     )
     include_path_patterns: list[str] = field(default_factory=list)
     exclude_specific_files: list[str] = field(default_factory=list)
+    prune_protected_paths: list[str] = field(default_factory=list)
     exclude_symlinks: bool = True
     max_file_size_mb: float = 500
     size_limits_by_type: dict[str, float] = field(
@@ -278,6 +279,7 @@ _STRING_LIST_FIELDS = {
     "exclude_path_patterns",
     "include_path_patterns",
     "exclude_specific_files",
+    "prune_protected_paths",
     "no_size_limit",
     "machine_state_collectors",
 }

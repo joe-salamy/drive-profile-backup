@@ -42,6 +42,7 @@ Edit `config.yaml` before running a backup:
 - `max_retries`: retry budget for rate-limited or transient Drive errors (`429`/`500`/`503` and rate-limit `403`); defaults to 8.
 - `writes_per_second`: client write throttle; `0` disables client throttling (unlimited) and relies on server-directed retries, while a positive value imposes a process-wide writes/second ceiling shared by all upload workers.
 - `resumable_threshold_mb`: files larger than this use resumable uploads; defaults to 5 MB.
+- `prune_protected_paths`: glob list of manifest paths that `--prune`, `--prune-trash` and `--prune-excluded` must leave on Drive even when the local file is gone (matched like `exclude_path_patterns`, where `*` spans `/`). Use it for deleted files whose only remaining copy is on Drive.
 
 Encrypted secrets: first backup with `encrypt_secrets: true` auto-generates `~/.drive-backup/secrets.key` (`0o600`, 32 bytes, also accepted as hex/base64). **Save it offline** — `drive-backup --generate-secrets-key` prints Hex/Base64 once; without it `*.enc` files on Drive cannot be decrypted. The key file and `~/.drive-backup/` are never uploaded. Restore decrypts by default (`--decrypt`, `--decrypt-key PATH`, `--no-decrypt` to keep `.enc`, `--no-encrypt-secrets` to skip secrets on backup). See `docs/03-secrets.md`.
 

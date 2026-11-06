@@ -13,6 +13,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
 from drive_backup.config import Config
@@ -1221,6 +1222,19 @@ class BackupEngine:
         """Return whether a manifest key still points to a local file."""
         return os.path.isfile(self._local_path_for_manifest_key(relative_path))
 
+    def _is_prune_protected(self, relative_path: str) -> bool:
+        """Return whether prune must leave this path on Drive.
+
+        Covers generated machine-state files and any config
+        ``prune_protected_paths`` glob matching the manifest key.
+        """
+        if relative_path in self._prune_protected_paths:
+            return True
+        return any(
+            fnmatch(relative_path, pattern)
+            for pattern in self.config.prune_protected_paths
+        )
+
     def _stale_manifest_entries(
         self, include_pruned: bool = True
     ) -> list[tuple[str, ManifestEntry]]:
@@ -1228,7 +1242,7 @@ class BackupEngine:
         return [
             (rel_path, entry)
             for rel_path, entry in sorted(self.manifest.entries.items())
-            if rel_path not in self._prune_protected_paths
+            if not self._is_prune_protected(rel_path)
             and not self._manifest_key_exists_locally(rel_path)
             and (include_pruned or not entry.pruned)
         ]
@@ -1309,7 +1323,7 @@ class BackupEngine:
             if not entry.pruned
             and rel_path not in self._scan_eligible_paths
             and rel_path not in self._scan_retained_paths
-            and rel_path not in self._prune_protected_paths
+            and not self._is_prune_protected(rel_path)
             and self._manifest_key_exists_locally(rel_path)
         }
 
