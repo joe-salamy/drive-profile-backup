@@ -7,12 +7,11 @@
 # Profile "inspiron-3535" backs up /home/joesa (ext4, Linux Mint) into the
 # same Drive folder the Windows install used, "Computer Backups/inspiron-3535".
 # Relative paths line up (checked 2026-09-28: 7,827 files / 8.9 GB byte-
-# identical), so the first run seeds from the Drive manifest snapshot and
-# skips them by MD5. The folder also keeps ~31k Windows-only files.
-# NEVER run --prune/--prune-trash on this profile: every Windows-only file
-# would look stale and be trashed.
-# --prune-excluded IS safe here: it only trashes Drive copies of files that
-# exist locally and are now excluded, and keeps folders holding Windows files.
+# identical), so the first run seeded from the Drive manifest snapshot and
+# skipped them by MD5. The Windows-only files were moved on 2026-11-06 to
+# "Computer Backups/inspiron-3535-windows-archive" (restore with
+# config.3535-windows-archive.yaml), so --prune, --prune-trash and
+# --prune-excluded now only touch files this Linux install backed up.
 
 # Blank means the current user's home directory (/home/joesa here).
 backup_root: ""

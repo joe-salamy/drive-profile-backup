@@ -25,6 +25,9 @@ otherwise `$DRIVE_BACKUP_CONFIG`, otherwise `./config.yaml`. Keep one tracked
 template per OS (`config.example.yaml`, `config.wsl.yaml`, `config.linux.yaml`)
 and give each laptop its own default via the env var or a local (gitignored)
 `config.yaml` copy — no source edits per machine.
+`config.3535-windows-archive.yaml` is restore-only: it points at the frozen
+Drive folder holding the 3535's Windows-only files
+(`drive-backup --config config.3535-windows-archive.yaml --restore --output PATH`).
 
 Edit `config.yaml` before running a backup:
 

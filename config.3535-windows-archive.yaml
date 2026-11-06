@@ -1,0 +1,26 @@
+# RESTORE-ONLY: frozen archive of the Windows-only files from the
+# inspiron-3535's Windows install. Restore with:
+#   drive-backup --config config.3535-windows-archive.yaml --restore --output ~/restore/windows
+#
+# On 2026-11-06 these files were moved out of "Computer Backups/inspiron-3535"
+# into "Computer Backups/inspiron-3535-windows-archive". They are the files the
+# Windows install backed up that never existed on Linux Mint, so the live
+# Linux profile can now be pruned normally. Files deleted on Windows before the
+# migration stay marked pruned (restore skips them; they are still on Drive).
+#
+# Never run a backup with this config. backup_root points nowhere on purpose,
+# so a run finds no files, uploads nothing and skips pruning.
+backup_root: "/nonexistent/inspiron-3535-windows-archive"
+
+profile_name: "inspiron-3535-windows-archive"
+drive_parent_folder_name: "Computer Backups"
+
+# Manifest auto-derives to
+# ~/.drive-backup/profiles/inspiron-3535-windows-archive/manifest.json; a fresh
+# machine downloads it from the archive folder's _meta/manifest.json.
+credentials_path: "credentials.json"
+token_path: "~/.drive-backup/token.json"
+# Windows *.enc archives decrypt with the same key as every other profile.
+secrets_key_path: "~/.drive-backup/secrets.key"
+
+machine_state_collectors: []
