@@ -1261,17 +1261,7 @@ class BackupEngine:
                 continue
 
             try:
-                assert self.drive is not None
-                self.drive.trash_file(entry.drive_file_id)
-                removed = self.manifest.remove(relative_path)
-                try:
-                    self._save_manifest_progress()
-                except ManifestProgressError:
-                    self.manifest.entries[relative_path] = removed or entry
-                    raise
-                self._record_pruned_file(relative_path, entry)
-            except ManifestProgressError:
-                raise
+                self._trash_drive_item(entry.drive_file_id)
             except Exception as e:  # noqa: BLE001
                 # Intentionally broad: one prune failure must not abort pruning.
                 logger.error("Failed to prune %s: %s", relative_path, e)
@@ -1283,6 +1273,13 @@ class BackupEngine:
                         error=str(e),
                     )
                 )
+                continue
+            # Throttled checkpoint: a crash loses at most one interval of
+            # removals, and re-trashing those next run is idempotent.
+            self.manifest.remove(relative_path)
+            self._manifest_dirty = True
+            self._maybe_save_manifest_progress()
+            self._record_pruned_file(relative_path, entry)
 
     def _note_scanned(self, file: FileEntry) -> None:
         """Remember what the current config backs up, for --prune-excluded."""

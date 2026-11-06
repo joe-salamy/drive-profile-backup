@@ -825,8 +825,8 @@ class TestBackupEngineUploadErrors:
         assert engine.stats.files_skipped_error == 1
         mock_drive.upload_file.assert_not_called()
 
-    def test_successful_prune_removal_persists_immediately(
-        self, tmp_path: Path
+    def test_trash_prune_checkpoints_on_interval_not_per_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         backup_root = tmp_path / "backup"
         state_dir = tmp_path / "state"
@@ -834,14 +834,15 @@ class TestBackupEngineUploadErrors:
         state_dir.mkdir()
         manifest_path = state_dir / "manifest.json"
         manifest = Manifest()
-        manifest.set(
-            relative_path="old/file.txt",
-            md5="abc",
-            size=10,
-            mtime=1.0,
-            drive_file_id="drive_old",
-            drive_parent_id="parent",
-        )
+        for name in ("a", "b", "gone"):
+            manifest.set(
+                relative_path=f"old/{name}.txt",
+                md5="abc",
+                size=10,
+                mtime=1.0,
+                drive_file_id=f"drive_{name}",
+                drive_parent_id="parent",
+            )
         manifest.save(str(manifest_path))
         config = Config(
             profile_name="laptop-a",
@@ -859,12 +860,31 @@ class TestBackupEngineUploadErrors:
         )
         engine.manifest = Manifest.load(str(manifest_path))
         mock_drive = MagicMock()
-        mock_drive.trash_file.return_value = {"id": "drive_old"}
+
+        def trash_file(file_id: str) -> dict[str, str]:
+            # Already purged from Drive (e.g. trash emptied after a crash): done.
+            if file_id == "drive_gone":
+                raise _FakeHttpError(404)
+            return {"id": file_id}
+
+        mock_drive.trash_file.side_effect = trash_file
         engine.drive = mock_drive
+        saves: list[int] = []
+        real_save = Manifest.save
+        monkeypatch.setattr(
+            Manifest,
+            "save",
+            lambda self, path: (saves.append(len(self.entries)), real_save(self, path)),
+        )
 
         engine._prune_stale_manifest_entries()
 
-        assert Manifest.load(str(manifest_path)).get("old/file.txt") is None
+        assert saves == []
+        assert engine.stats.files_pruned == 3
+        assert engine.stats.files_prune_failed == 0
+        engine._maybe_save_manifest_progress(force=True)
+        assert saves == [0]
+        assert Manifest.load(str(manifest_path)).entries == {}
 
     def test_manifest_progress_save_failure_aborts_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
