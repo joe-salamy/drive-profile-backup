@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,7 +24,9 @@ def _http_error(status: int) -> HttpError:
 
 def _html_error(status: int) -> HttpError:
     response = MagicMock(status=status, reason="Bad Request")
-    return HttpError(response, b'<html><title>Error 400 (Bad Request)!!1</title></html>')
+    return HttpError(
+        response, b"<html><title>Error 400 (Bad Request)!!1</title></html>"
+    )
 
 
 class TestRateLimiter:
@@ -403,3 +406,24 @@ class TestDriveAPI:
             fileId="file_123", body={"trashed": True}, fields="id, name, trashed"
         )
         api._rate_limiter.wait.assert_called_once()
+
+    def test_download_file_writes_media_bytes_not_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        from googleapiclient.discovery import build  # type: ignore[import-untyped]
+        from googleapiclient.http import (  # type: ignore[import-untyped]
+            HttpMockSequence,
+        )
+
+        content = b"\x00real file bytes\xff"
+        http = HttpMockSequence(
+            [({"status": "200", "content-length": str(len(content))}, content)]
+        )
+        api = DriveAPI(credentials_path="creds.json", token_path="token.json")
+        api._service = build("drive", "v3", http=http, static_discovery=True)
+        target = tmp_path / "out.bin"
+
+        api.download_file("file_123", str(target))
+
+        assert target.read_bytes() == content
+        assert "alt=media" in http.request_sequence[0][0]

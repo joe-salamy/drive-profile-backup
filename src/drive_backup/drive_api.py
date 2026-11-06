@@ -347,7 +347,9 @@ class DriveAPI:
         """Download a Drive file's media content to a local path."""
         from googleapiclient.http import MediaIoBaseDownload
 
-        request = self.service.files().get(fileId=file_id, alt="media")
+        # get_media, not get(alt="media"): the client rewrites the latter to
+        # alt=json, which downloads the file's metadata instead of its bytes.
+        request = self.service.files().get_media(fileId=file_id)
         with open(local_path, "wb") as f:
             downloader = MediaIoBaseDownload(f, request, chunksize=1024 * 1024)
             done = False
