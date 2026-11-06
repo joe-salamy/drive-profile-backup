@@ -64,6 +64,16 @@ def _is_not_found_error(error: BaseException) -> bool:
     return getattr(getattr(error, "resp", None), "status", None) == 404
 
 
+def _is_app_not_authorized_to_child(error: BaseException) -> bool:
+    """Return whether a folder trash failed because another app owns a child.
+
+    With the drive.file scope, Drive refuses to trash a folder holding any
+    item this OAuth client did not create (e.g. uploads from an older client).
+    """
+    status = getattr(getattr(error, "resp", None), "status", None)
+    return status == 403 and "appNotAuthorizedToChild" in str(error)
+
+
 class ManifestProgressError(RuntimeError):
     """Raised when manifest progress cannot be saved durably."""
 
@@ -1445,45 +1455,107 @@ class BackupEngine:
                 self._record_prune_error(key, "", "missing Drive file ID")
 
         executor: ThreadPoolExecutor | None = None
+        known_folder_ids: dict[str, str] | None = None
+        pending = jobs
         try:
-            outcomes: Iterable[Exception | None]
-            if self.dry_run:
-                outcomes = itertools.repeat(None)
-            else:
+            if not self.dry_run:
                 executor = ThreadPoolExecutor(max_workers=PRUNE_TRASH_WORKERS)
-                outcomes = executor.map(
-                    self._try_trash_drive_item, [job.drive_id for job in jobs]
-                )
-            for job, error in zip(jobs, outcomes):
-                if error is not None:
-                    label = (
-                        f"{job.relative_path}/" if job.is_folder else job.relative_path
+            while pending:
+                retry: list[_TrashJob] = []
+                outcomes: Iterable[Exception | None]
+                if executor is None:
+                    outcomes = itertools.repeat(None)
+                else:
+                    outcomes = executor.map(
+                        self._try_trash_drive_item, [job.drive_id for job in pending]
                     )
-                    self._record_prune_error(label, job.drive_id, str(error))
-                    continue
-                if job.is_folder:
-                    self.stats.pruned_folders.append(
-                        PrunedFolder(
-                            relative_path=job.relative_path,
-                            drive_folder_id=job.drive_id,
-                            files=sum(key in targets for key in job.keys),
+                for job, error in zip(pending, outcomes):
+                    if error is not None:
+                        if job.is_folder and _is_app_not_authorized_to_child(error):
+                            # Trash what this app owns piece by piece; only
+                            # the pieces holding foreign items stay behind.
+                            if known_folder_ids is None:
+                                known_folder_ids = self._known_folder_ids()
+                            logger.info(
+                                "Folder %s holds items another app created; "
+                                "trashing its contents separately",
+                                job.relative_path,
+                            )
+                            retry.extend(self._split_folder_job(job, known_folder_ids))
+                            continue
+                        label = (
+                            f"{job.relative_path}/"
+                            if job.is_folder
+                            else job.relative_path
                         )
-                    )
-                for key in job.keys:
-                    if key in targets:
-                        self._record_pruned_file(key, targets[key], reason=reason)
+                        self._record_prune_error(label, job.drive_id, str(error))
+                        continue
+                    if job.is_folder:
+                        self.stats.pruned_folders.append(
+                            PrunedFolder(
+                                relative_path=job.relative_path,
+                                drive_folder_id=job.drive_id,
+                                files=sum(key in targets for key in job.keys),
+                            )
+                        )
+                    for key in job.keys:
+                        if key in targets:
+                            self._record_pruned_file(key, targets[key], reason=reason)
+                        if not self.dry_run:
+                            self.manifest.remove(key)
                     if not self.dry_run:
-                        self.manifest.remove(key)
-                if not self.dry_run:
-                    # Throttled checkpoint: a crash loses at most one interval
-                    # of removals, and re-trashing those next run is idempotent.
-                    self._manifest_dirty = True
-                    self._maybe_save_manifest_progress()
+                        # Throttled checkpoint: a crash loses at most one
+                        # interval of removals, and re-trashing those next run
+                        # is idempotent.
+                        self._manifest_dirty = True
+                        self._maybe_save_manifest_progress()
+                pending = retry
         finally:
             if executor is not None:
                 # Ctrl-C or a failed checkpoint: drop queued calls, finish the
                 # in-flight ones.
                 executor.shutdown(wait=True, cancel_futures=True)
+
+    def _known_folder_ids(self) -> dict[str, str]:
+        """Map each manifest directory path to its Drive folder ID."""
+        folder_ids: dict[str, str] = {}
+        for rel_path, entry in self.manifest.entries.items():
+            parent = os.path.dirname(rel_path)
+            if parent and entry.drive_parent_id:
+                folder_ids.setdefault(parent, entry.drive_parent_id)
+        return folder_ids
+
+    def _split_folder_job(
+        self, job: _TrashJob, folder_ids: dict[str, str]
+    ) -> list[_TrashJob]:
+        """Replace a folder job with jobs for its direct files and subfolders.
+
+        A subfolder whose Drive ID is unknown (it holds no files directly) is
+        split further right away.
+        """
+        jobs: list[_TrashJob] = []
+        by_child: dict[str, list[str]] = {}
+        prefix = f"{job.relative_path}/"
+        for key in job.keys:
+            rest = key[len(prefix) :]
+            if "/" in rest:
+                child = prefix + rest.split("/", 1)[0]
+                by_child.setdefault(child, []).append(key)
+                continue
+            entry = self.manifest.entries.get(key)
+            if entry is None:
+                continue
+            if entry.drive_file_id:
+                jobs.append(_TrashJob(key, entry.drive_file_id, (key,), False))
+            else:
+                self._record_prune_error(key, "", "missing Drive file ID")
+        for child, keys in sorted(by_child.items()):
+            child_job = _TrashJob(child, folder_ids.get(child, ""), tuple(keys), True)
+            if child_job.drive_id:
+                jobs.append(child_job)
+            else:
+                jobs.extend(self._split_folder_job(child_job, folder_ids))
+        return jobs
 
 
 def _format_mtime(mtime: float) -> str:

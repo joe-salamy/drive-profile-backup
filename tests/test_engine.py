@@ -28,8 +28,8 @@ from tests.file_helpers import write_tree
 class _FakeHttpError(Exception):
     """Stand-in for googleapiclient's HttpError: only resp.status matters."""
 
-    def __init__(self, status: int) -> None:
-        super().__init__(f"HTTP {status}")
+    def __init__(self, status: int, message: str = "") -> None:
+        super().__init__(message or f"HTTP {status}")
         self.resp = MagicMock(status=status)
 
 
@@ -1987,6 +1987,52 @@ class TestBackupEnginePruneExcluded:
         ]
         assert report["files_pruned"] == 3
         assert {row["reason"] for row in report["pruned_files"]} == {"missing"}
+
+    def test_folder_holding_another_apps_items_is_trashed_piece_by_piece(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class ForeignChildDrive(_PruneExcludedDrive):
+            """Refuses folders that hold items another OAuth client created."""
+
+            def trash_file(self, file_id: str) -> dict[str, str]:
+                self.trash_calls.append(file_id)
+                if file_id in {"gone_folder", "foreign_folder"}:
+                    raise _FakeHttpError(403, "reason: 'appNotAuthorizedToChild'")
+                return {"id": file_id}
+
+        home = tmp_path / "home"
+        write_tree(home, {"keep/notes.txt": "keep"})
+        manifest = Manifest()
+        self._track(manifest, home, "keep/notes.txt", "keep_folder")
+        self._track(manifest, home, "gone/a.txt", "gone_folder")
+        self._track(manifest, home, "gone/sub/b.txt", "sub_folder")
+        # gone/deep holds no files directly, so its Drive ID is unknown.
+        self._track(manifest, home, "gone/deep/x/c.txt", "x_folder")
+        self._track(manifest, home, "gone/foreign/d.txt", "foreign_folder")
+
+        drive, saved, report = self._run(
+            tmp_path,
+            monkeypatch,
+            manifest,
+            prune_trash=True,
+            drive=ForeignChildDrive(),
+        )
+
+        assert sorted(drive.trash_calls) == [
+            "foreign_folder",
+            "gone_folder",
+            "id:gone/a.txt",
+            "id:gone/foreign/d.txt",
+            "sub_folder",
+            "x_folder",
+        ]
+        assert set(saved.entries) == {"keep/notes.txt"}
+        assert report["files_prune_failed"] == 0
+        assert report["files_pruned"] == 4
+        assert sorted(f["relative_path"] for f in report["pruned_folders"]) == [
+            "gone/deep/x",
+            "gone/sub",
+        ]
 
     def test_kept_file_in_same_drive_folder_blocks_folder_trash(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
