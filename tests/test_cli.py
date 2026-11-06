@@ -108,6 +108,7 @@ class TestCliMain:
                 full: bool,
                 prune: bool,
                 prune_mode: str,
+                prune_excluded: bool,
                 collect_machine_state_snapshot: bool,
             ) -> None:
                 assert dry_run is True
@@ -333,6 +334,7 @@ class TestCliMain:
                 full: bool,
                 prune: bool,
                 prune_mode: str,
+                prune_excluded: bool,
                 collect_machine_state_snapshot: bool,
             ) -> None:
                 captured["dry_run"] = dry_run
@@ -384,6 +386,7 @@ class TestCliMain:
                 full: bool,
                 prune: bool,
                 prune_mode: str,
+                prune_excluded: bool,
                 collect_machine_state_snapshot: bool,
             ) -> None:
                 captured["dry_run"] = dry_run

@@ -33,7 +33,7 @@ Edit `config.yaml` before running a backup:
 - `drive_parent_folder_name`: parent folder in Google Drive.
 - `credentials_path`: local OAuth client JSON path; default is `credentials.json`.
 - `token_path`: local OAuth token path; default is `~/.drive-backup/token.json`.
-- `secrets_key_path`: path to AES-256-GCM key for encrypted secrets; default is `~/.drive-backup/secrets.key` (never uploaded, see `drive-backup --generate-secrets-key`). `encrypt_secrets: true` (default) encrypts `.env`, `credentials.json`, `token.json`, `id_rsa*`, `*.pem`, `.boto`, `.claude.json*` and files under `.ssh`/`.azure`/`.gemini`/`.android`/`.aitk`/`.cisco` as `*.enc` on Drive.
+- `secrets_key_path`: path to AES-256-GCM key for encrypted secrets; default is `~/.drive-backup/secrets.key` (never uploaded, see `drive-backup --generate-secrets-key`). `encrypt_secrets: true` (default) encrypts `.env`/`*.env`, `secrets.toml`, `credentials.json`, `token.json`, `id_rsa*`, `*.pem`, `.boto`, `.claude.json*` and files under `.ssh`/`.azure`/`.gemini`/`.android`/`.aitk`/`.cisco` as `*.enc` on Drive. When a file switches between plaintext and encrypted, the old Drive copy is trashed after the new one uploads.
 - `machine_state_collectors`: ordered list of generated Windows/WSL inventories to refresh; the example lists every supported collector.
 - `upload_workers`: parallel Drive upload workers; defaults to 8 (`config.example.yaml`) and 16 in the workstation `config.yaml`.
 - `max_retries`: retry budget for rate-limited or transient Drive errors (`429`/`500`/`503` and rate-limit `403`); defaults to 8.
@@ -51,6 +51,7 @@ drive-backup --dry-run
 drive-backup
 drive-backup --full
 drive-backup --prune
+drive-backup --dry-run --prune-excluded
 drive-backup --verbose
 drive-backup --skip-machine-state
 drive-backup --generate-secrets-key
@@ -63,6 +64,7 @@ Flags:
 - `--dry-run`: refresh local machine-state inventories, then scan and report without uploading or pruning. Combine with `--skip-machine-state` for a no-refresh preview. Report includes `files_encrypted_uploaded` / `total_size_encrypted_human` when secrets are present.
 - `--full`: ignore the manifest and upload every eligible file.
 - `--prune`: move stale Drive files to trash when their manifest entries no longer exist locally.
+- `--prune-excluded`: trash Drive copies of files that still exist locally but the current config no longer backs up (new exclusions, type limits, symlinks), and drop them from the manifest. A Drive folder is trashed whole when no tracked file under it is still kept; otherwise files go one by one. Files only on Drive, unreadable files, and files that grew past a size limit keep their copies, so it is safe on a profile folder shared with another OS. Report rows carry `reason: "excluded"`; trashed folders are listed in `pruned_folders`.
 - `--verbose`: print per-file actions and DEBUG logs.
 - `--skip-machine-state`: do not refresh generated inventories. Existing snapshots remain eligible for ordinary scan, deduplication, and upload.
 - `--config PATH`: use this config file. Overrides `$DRIVE_BACKUP_CONFIG`.

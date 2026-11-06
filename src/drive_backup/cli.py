@@ -75,6 +75,12 @@ def main(argv: list[str] | None = None) -> None:
         "(default: --prune marks them as pruned)",
     )
     parser.add_argument(
+        "--prune-excluded",
+        action="store_true",
+        help="Move Drive copies of local files the current config excludes to "
+        "trash and remove them from the manifest (whole folders when possible)",
+    )
+    parser.add_argument(
         "--restore",
         action="store_true",
         help="Download the latest backup from Drive into --output, "
@@ -139,7 +145,7 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     args = parser.parse_args(argv)
-    if args.full and (args.prune or args.prune_trash):
+    if args.full and (args.prune or args.prune_trash or args.prune_excluded):
         parser.error(
             "--prune cannot be combined with --full because prune needs the existing manifest"
         )
@@ -147,9 +153,12 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--prune and --prune-trash are mutually exclusive")
     if args.restore and not args.output:
         parser.error("--restore requires --output")
-    if args.restore and (args.full or args.prune or args.prune_trash):
+    if args.restore and (
+        args.full or args.prune or args.prune_trash or args.prune_excluded
+    ):
         parser.error(
-            "--restore cannot be combined with --full, --prune, or --prune-trash"
+            "--restore cannot be combined with --full, --prune, --prune-trash, "
+            "or --prune-excluded"
         )
 
     # Setup logging
@@ -321,7 +330,7 @@ def main(argv: list[str] | None = None) -> None:
     prune_enabled = args.prune or args.prune_trash
     prune_mode = "trash" if args.prune_trash else "flag"
 
-    if args.dry_run and prune_enabled:
+    if args.dry_run and (prune_enabled or args.prune_excluded):
         console.print("[yellow]DRY RUN - no files will be uploaded or pruned[/]")
     elif args.dry_run:
         console.print("[yellow]DRY RUN - no files will be uploaded[/]")
@@ -332,6 +341,11 @@ def main(argv: list[str] | None = None) -> None:
             "[yellow]PRUNE - stale Drive files will be marked as pruned "
             "(use --prune-trash to delete)[/]"
         )
+    if args.prune_excluded and not args.dry_run:
+        console.print(
+            "[yellow]PRUNE - Drive copies of excluded local files will be moved "
+            "to trash[/]"
+        )
 
     # Create engine
     engine = BackupEngine(
@@ -340,6 +354,7 @@ def main(argv: list[str] | None = None) -> None:
         full=args.full,
         prune=prune_enabled,
         prune_mode=prune_mode,
+        prune_excluded=args.prune_excluded,
         collect_machine_state_snapshot=not args.skip_machine_state,
     )
 
@@ -453,7 +468,11 @@ def _print_summary(
     if report.get("drive_folder_url"):
         table.add_row("Drive folder", report["drive_folder_url"])
 
-    if report.get("prune_enabled") or report.get("files_pruned", 0):
+    if (
+        report.get("prune_enabled")
+        or report.get("prune_excluded_enabled")
+        or report.get("files_pruned", 0)
+    ):
         table.add_row(
             "Files to prune" if report["dry_run"] else "Files pruned",
             str(report.get("files_pruned", 0)),
@@ -463,6 +482,11 @@ def _print_summary(
             report.get("total_size_pruned_human", "0.0 B"),
         )
         table.add_row("Prune failures", str(report.get("files_prune_failed", 0)))
+        if report.get("pruned_folders"):
+            table.add_row(
+                "Folders to trash" if report["dry_run"] else "Folders trashed",
+                str(len(report["pruned_folders"])),
+            )
 
     if not report["dry_run"]:
         if report["manifest_snapshot_error"]:

@@ -27,6 +27,7 @@ from drive_backup.report import (
     BackupStats,
     ErrorFile,
     PrunedFile,
+    PrunedFolder,
     PruneError,
     SkippedFile,
     UploadFile,
@@ -74,6 +75,10 @@ class UploadWork:
     reason: str
     existing_drive_file_id: str | None
     is_encrypted: bool = False
+    # Drive file to trash once the new copy is up: set when a file switches
+    # between plaintext and encrypted, since the Drive name changes (*.enc) and
+    # the old copy would otherwise stay behind untracked.
+    replaced_drive_file_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +87,7 @@ class UploadResult:
     drive_file_id: str
     drive_parent_id: str
     encrypted: bool = False
+    replace_error: str = ""
 
 
 class BackupEngine:
@@ -94,6 +100,7 @@ class BackupEngine:
         full: bool = False,
         prune: bool = False,
         prune_mode: str = "flag",
+        prune_excluded: bool = False,
         collect_machine_state_snapshot: bool = True,
     ) -> None:
         if prune_mode not in ("flag", "trash"):
@@ -103,6 +110,7 @@ class BackupEngine:
         self.full = full  # Ignore manifest, re-upload everything
         self.prune = prune
         self.prune_mode = prune_mode
+        self.prune_excluded = prune_excluded
         self.collect_machine_state_snapshot = collect_machine_state_snapshot
         self.stats = BackupStats(
             backup_root=config.backup_root,
@@ -110,11 +118,16 @@ class BackupEngine:
             profile_name=config.profile_name,
             prune_enabled=prune,
             prune_mode=prune_mode,
+            prune_excluded_enabled=prune_excluded,
         )
         self.manifest = Manifest()
         self.drive: DriveAPI | None = None  # Lazy: imported only when needed
         self._root_folder_id: str = ""
         self._prune_protected_paths: set[str] = set()
+        # Filled during the scan for --prune-excluded: paths the current config
+        # backs up, and skipped paths whose Drive copy must survive anyway.
+        self._scan_eligible_paths: set[str] = set()
+        self._scan_retained_paths: set[str] = set()
         self._manifest_dirty: bool = False
         self._last_manifest_checkpoint_at: float = time.monotonic()
         self._secrets_key: bytes | None = None
@@ -256,6 +269,7 @@ class BackupEngine:
         if self.dry_run:
             for file_entry in scan(self.config):
                 self.stats.files_scanned += 1
+                self._note_scanned(file_entry)
                 # _prepare_upload handles skips/dedup/dry-run accounting
                 self._prepare_upload(file_entry, progress_callback)
             # prune handling for dry-run (serial, no checkpoint)
@@ -274,6 +288,7 @@ class BackupEngine:
                     )
                 else:
                     self._prune_stale_manifest_entries()
+            self._maybe_prune_excluded(backup_root_available)
             self.stats.end_time = time.time()
             # Dry-run never saves manifest or uploads snapshot/report
             report = generate_report(self.stats)
@@ -299,6 +314,7 @@ class BackupEngine:
             try:
                 for file_entry in scan(self.config):
                     self.stats.files_scanned += 1
+                    self._note_scanned(file_entry)
                     # Prepare upload work (handles skips/dedup)
                     work = self._prepare_upload(file_entry, progress_callback)
                     if work is None:
@@ -517,6 +533,11 @@ class BackupEngine:
                     except ManifestProgressError:
                         final_checkpoint_failed = True
                         raise
+            try:
+                self._maybe_prune_excluded(backup_root_available)
+            except ManifestProgressError:
+                final_checkpoint_failed = True
+                raise
 
             self.stats.end_time = time.time()
 
@@ -844,6 +865,9 @@ class BackupEngine:
         # Do not reuse ID when encrypted flag changed — Drive filename differs (*.enc).
         existing = self.manifest.get(file.relative_path)
         existing_drive_file_id: str | None = None
+        replaced_drive_file_id: str | None = None
+        if existing and existing.drive_file_id and existing.encrypted != is_encrypted:
+            replaced_drive_file_id = existing.drive_file_id
         if existing and existing.drive_file_id and existing.encrypted == is_encrypted:
             base_reason = reason.split(" (")[0]
             if base_reason in (
@@ -858,6 +882,7 @@ class BackupEngine:
             reason=reason,
             existing_drive_file_id=existing_drive_file_id,
             is_encrypted=is_encrypted,
+            replaced_drive_file_id=replaced_drive_file_id,
         )
 
     def _put_file(
@@ -891,6 +916,34 @@ class BackupEngine:
         return self.drive.upload_file(local_path, parent_id, resumable=resumable)
 
     def _execute_upload(self, work: UploadWork) -> UploadResult:
+        """Upload one file, then trash the copy it replaces under another name."""
+        result = self._put_work(work)
+        replaced_id = work.replaced_drive_file_id
+        if not replaced_id or replaced_id == result.drive_file_id:
+            return result
+        assert self.drive is not None
+        try:
+            self.drive.trash_file(replaced_id)
+        except Exception as exc:  # noqa: BLE001
+            # Intentionally broad: the upload itself succeeded; report the
+            # leftover copy instead of failing the file.
+            if not _is_not_found_error(exc):
+                logger.error(
+                    "Uploaded %s but could not trash its previous Drive copy %s: %s",
+                    work.file.relative_path,
+                    replaced_id,
+                    exc,
+                )
+                return UploadResult(
+                    md5=result.md5,
+                    drive_file_id=result.drive_file_id,
+                    drive_parent_id=result.drive_parent_id,
+                    encrypted=result.encrypted,
+                    replace_error=str(exc),
+                )
+        return result
+
+    def _put_work(self, work: UploadWork) -> UploadResult:
         """Perform folder resolution and Drive I/O for a single file."""
         assert self.drive is not None
         file = work.file
@@ -1004,6 +1057,15 @@ class BackupEngine:
         if work.is_encrypted or result.encrypted:
             self.stats.files_encrypted_uploaded += 1
             self.stats.bytes_encrypted_uploaded += file.size
+        if result.replace_error:
+            self.stats.files_prune_failed += 1
+            self.stats.prune_error_files.append(
+                PruneError(
+                    relative_path=file.relative_path,
+                    drive_file_id=work.replaced_drive_file_id or "",
+                    error=f"previous Drive copy not trashed: {result.replace_error}",
+                )
+            )
         self._record_upload(file)
         if progress_callback:
             progress_callback(file, ProgressEvent(ProgressKind.UPLOADED, work.reason))
@@ -1155,7 +1217,9 @@ class BackupEngine:
             and (include_pruned or not entry.pruned)
         ]
 
-    def _record_pruned_file(self, relative_path: str, entry: ManifestEntry) -> None:
+    def _record_pruned_file(
+        self, relative_path: str, entry: ManifestEntry, reason: str = "missing"
+    ) -> None:
         """Track a pruned (or would-be-pruned) Drive file for reporting."""
         self.stats.files_pruned += 1
         self.stats.bytes_pruned += entry.size
@@ -1165,6 +1229,7 @@ class BackupEngine:
                 drive_file_id=entry.drive_file_id,
                 size_bytes=entry.size,
                 size_human=human_size(entry.size),
+                reason=reason,
             )
         )
 
@@ -1218,6 +1283,177 @@ class BackupEngine:
                         error=str(e),
                     )
                 )
+
+    def _note_scanned(self, file: FileEntry) -> None:
+        """Remember what the current config backs up, for --prune-excluded."""
+        if not self.prune_excluded:
+            return
+        if not file.is_skipped:
+            self._scan_eligible_paths.add(file.relative_path)
+        elif "error" in file.skip_reason or file.skip_reason.startswith(
+            "exceeds_size_limit"
+        ):
+            # Unreadable files are still wanted, and a file that grew past the
+            # size limit keeps its last good backup.
+            self._scan_retained_paths.add(file.relative_path)
+
+    def _maybe_prune_excluded(self, backup_root_available: bool) -> None:
+        """Run --prune-excluded unless the scan cannot be trusted."""
+        if not self.prune_excluded:
+            return
+        skipped_reason = ""
+        if self.full:
+            skipped_reason = (
+                "Skipped excluded-file prune because --full ignores the manifest"
+            )
+        elif not backup_root_available:
+            skipped_reason = (
+                "Skipped excluded-file prune because backup root is unavailable"
+            )
+        if skipped_reason:
+            self.stats.prune_skipped_reason = "; ".join(
+                filter(None, [self.stats.prune_skipped_reason, skipped_reason])
+            )
+            return
+        self._prune_excluded_manifest_entries()
+
+    def _excluded_manifest_entries(self) -> dict[str, ManifestEntry]:
+        """Return live entries for local files the current config no longer backs up."""
+        return {
+            rel_path: entry
+            for rel_path, entry in self.manifest.entries.items()
+            if not entry.pruned
+            and rel_path not in self._scan_eligible_paths
+            and rel_path not in self._scan_retained_paths
+            and rel_path not in self._prune_protected_paths
+            and self._manifest_key_exists_locally(rel_path)
+        }
+
+    def _group_excluded_by_folder(
+        self, excluded: dict[str, ManifestEntry]
+    ) -> tuple[dict[str, str], dict[str, list[str]], list[str]]:
+        """Pick Drive folders that can be trashed whole.
+
+        A folder qualifies when no manifest entry under it is still backed up
+        (or still kept on Drive for a file that exists only there, like the
+        Windows-only files in a reused profile folder). Each excluded file goes
+        to its shallowest qualifying ancestor whose Drive ID is known; the rest
+        are trashed one by one.
+
+        Returns (folder path -> Drive ID, folder path -> manifest keys to drop,
+        keys to trash individually).
+        """
+        keep_dirs: set[str] = set()
+        folder_ids: dict[str, str] = {}
+        for rel_path, entry in self.manifest.entries.items():
+            parent = os.path.dirname(rel_path)
+            if rel_path in excluded or entry.pruned:
+                if parent and entry.drive_parent_id:
+                    folder_ids.setdefault(parent, entry.drive_parent_id)
+                continue
+            while parent and parent not in keep_dirs:
+                keep_dirs.add(parent)
+                parent = os.path.dirname(parent)
+        folder_ids = {
+            path: folder_id
+            for path, folder_id in folder_ids.items()
+            if path not in keep_dirs and folder_id != self._root_folder_id
+        }
+
+        def folder_for(rel_path: str) -> str | None:
+            parts = rel_path.split("/")[:-1]
+            for depth in range(1, len(parts) + 1):
+                ancestor = "/".join(parts[:depth])
+                if ancestor in folder_ids:
+                    return ancestor
+            return None
+
+        folders: dict[str, list[str]] = {}
+        singles: list[str] = []
+        for rel_path in sorted(excluded):
+            folder = folder_for(rel_path)
+            if folder is None:
+                singles.append(rel_path)
+            else:
+                folders.setdefault(folder, []).append(rel_path)
+        # Flag-pruned history copies under a trashed folder go with it.
+        for rel_path, entry in self.manifest.entries.items():
+            if entry.pruned:
+                folder = folder_for(rel_path)
+                if folder in folders:
+                    folders[folder].append(rel_path)
+        return {path: folder_ids[path] for path in folders}, folders, singles
+
+    def _record_excluded_prune_error(
+        self, relative_path: str, drive_id: str, error: str
+    ) -> None:
+        logger.error("Failed to prune excluded %s: %s", relative_path, error)
+        self.stats.files_prune_failed += 1
+        self.stats.prune_error_files.append(
+            PruneError(relative_path=relative_path, drive_file_id=drive_id, error=error)
+        )
+
+    def _trash_drive_item(self, drive_id: str) -> None:
+        """Trash a Drive file or folder; one already gone counts as done."""
+        assert self.drive is not None
+        try:
+            self.drive.trash_file(drive_id)
+        except Exception as exc:
+            if not _is_not_found_error(exc):
+                raise
+
+    def _prune_excluded_manifest_entries(self) -> None:
+        """Trash Drive copies of local files the current config excludes."""
+        excluded = self._excluded_manifest_entries()
+        if not excluded:
+            return
+        folder_ids, folders, singles = self._group_excluded_by_folder(excluded)
+
+        for folder in sorted(folders):
+            keys = folders[folder]
+            if not self.dry_run:
+                try:
+                    self._trash_drive_item(folder_ids[folder])
+                except Exception as exc:  # noqa: BLE001
+                    # Intentionally broad: one failure must not abort pruning.
+                    self._record_excluded_prune_error(
+                        f"{folder}/", folder_ids[folder], str(exc)
+                    )
+                    continue
+            self.stats.pruned_folders.append(
+                PrunedFolder(
+                    relative_path=folder,
+                    drive_folder_id=folder_ids[folder],
+                    files=sum(key in excluded for key in keys),
+                )
+            )
+            for key in keys:
+                if key in excluded:
+                    self._record_pruned_file(key, excluded[key], reason="excluded")
+                if not self.dry_run:
+                    self.manifest.remove(key)
+            if not self.dry_run:
+                self._manifest_dirty = True
+                self._maybe_save_manifest_progress()
+
+        for key in singles:
+            entry = excluded[key]
+            if not entry.drive_file_id:
+                self._record_excluded_prune_error(key, "", "missing Drive file ID")
+                continue
+            if not self.dry_run:
+                try:
+                    self._trash_drive_item(entry.drive_file_id)
+                except Exception as exc:  # noqa: BLE001
+                    # Intentionally broad: one failure must not abort pruning.
+                    self._record_excluded_prune_error(
+                        key, entry.drive_file_id, str(exc)
+                    )
+                    continue
+                self.manifest.remove(key)
+                self._manifest_dirty = True
+                self._maybe_save_manifest_progress()
+            self._record_pruned_file(key, entry, reason="excluded")
 
 
 def _format_mtime(mtime: float) -> str:

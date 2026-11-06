@@ -19,6 +19,7 @@ from drive_backup.engine import (
     _format_mtime,
 )
 from drive_backup.machine_state import CollectorOutcome, CollectorStatus
+from drive_backup.report import BackupReport
 from drive_backup.scanner import FileEntry
 from tests.file_helpers import write_tree
 
@@ -1701,3 +1702,233 @@ class TestBackupEngineManifestSnapshot:
         assert report["manifest_snapshot_downloaded"] is False
         assert report["manifest_snapshot_uploaded"] is False
         assert report["manifest_snapshot_error"] == ""
+
+
+class _PruneExcludedDrive:
+    """Fake Drive recording trash calls; uploads get deterministic IDs."""
+
+    def __init__(self) -> None:
+        self.trash_calls: list[str] = []
+        self.uploaded: list[str] = []
+
+    def authenticate(self) -> None:
+        pass
+
+    def get_or_create_folder(self, name: str, parent_id: str | None = None) -> str:
+        return f"{name}_id"
+
+    def ensure_folder_path(self, path_parts: list[str], root_id: str) -> str:
+        return "/".join(path_parts) + "_folder"
+
+    def find_file_by_name_and_parent(
+        self, name: str, parent_id: str
+    ) -> dict[str, str] | None:
+        return None
+
+    def upload_file(
+        self, local_path: str, parent_id: str, resumable: bool = False
+    ) -> dict[str, str]:
+        name = Path(local_path).name
+        self.uploaded.append(name)
+        return {"id": f"new_{name}", "md5Checksum": ""}
+
+    def update_file(
+        self, file_id: str, local_path: str, resumable: bool = False
+    ) -> dict[str, str]:
+        return {"id": file_id, "md5Checksum": ""}
+
+    def trash_file(self, file_id: str) -> dict[str, str]:
+        self.trash_calls.append(file_id)
+        return {"id": file_id}
+
+
+class TestBackupEnginePruneExcluded:
+    @staticmethod
+    def _track(manifest: Manifest, root: Path, rel: str, parent_id: str) -> None:
+        """Record rel in the manifest as already backed up, unchanged if local."""
+        local = root / rel
+        exists = local.exists()
+        manifest.set(
+            relative_path=rel,
+            md5=(compute_md5(str(local)) or "") if exists else "gone",
+            size=local.stat().st_size if exists else 4,
+            mtime=local.stat().st_mtime if exists else 1.0,
+            drive_file_id=f"id:{rel}",
+            drive_parent_id=parent_id,
+        )
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        manifest: Manifest,
+        *,
+        dry_run: bool = False,
+        **config_overrides: object,
+    ) -> tuple[_PruneExcludedDrive, Manifest, BackupReport]:
+        manifest_path = tmp_path / "state" / "manifest.json"
+        manifest.save(str(manifest_path))
+        drive = _PruneExcludedDrive()
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: drive)
+        options: dict[str, object] = {
+            "exclude_dirs": [],
+            "exclude_files": [],
+            "secrets_key_path": str(tmp_path / "state" / "secrets.key"),
+        }
+        options.update(config_overrides)
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(tmp_path / "home"),
+            manifest_path=str(manifest_path),
+            **options,  # type: ignore[arg-type]
+        )
+        report = BackupEngine(
+            config,
+            dry_run=dry_run,
+            prune_excluded=True,
+            collect_machine_state_snapshot=False,
+        ).run()
+        return drive, Manifest.load(str(manifest_path)), report
+
+    def test_fully_excluded_tree_is_trashed_as_one_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        write_tree(
+            home,
+            {
+                "notes.txt": "keep",
+                "target/app.bin": "build",
+                "target/debug/dep.bin": "build",
+            },
+        )
+        manifest = Manifest()
+        self._track(manifest, home, "notes.txt", "root")
+        self._track(manifest, home, "target/app.bin", "target_folder")
+        self._track(manifest, home, "target/debug/dep.bin", "debug_folder")
+        # Flag-pruned history copy under the same folder goes with it.
+        self._track(manifest, home, "target/old.bin", "target_folder")
+        manifest.entries["target/old.bin"].pruned = True
+
+        drive, saved, report = self._run(
+            tmp_path, monkeypatch, manifest, exclude_dirs=["target"]
+        )
+
+        assert drive.trash_calls == ["target_folder"]
+        assert set(saved.entries) == {"notes.txt"}
+        assert report["pruned_folders"] == [
+            {"relative_path": "target", "drive_folder_id": "target_folder", "files": 2}
+        ]
+        assert {row["relative_path"] for row in report["pruned_files"]} == {
+            "target/app.bin",
+            "target/debug/dep.bin",
+        }
+        assert {row["reason"] for row in report["pruned_files"]} == {"excluded"}
+
+    def test_folder_with_kept_or_drive_only_files_is_trashed_file_by_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        write_tree(
+            home,
+            {
+                "mixed/keep.txt": "keep",
+                "mixed/noise.log": "log",
+                "shared/noise.log": "log",
+            },
+        )
+        manifest = Manifest()
+        self._track(manifest, home, "mixed/keep.txt", "mixed_folder")
+        self._track(manifest, home, "mixed/noise.log", "mixed_folder")
+        self._track(manifest, home, "shared/noise.log", "shared_folder")
+        # Exists only on Drive (e.g. from another OS): not flag-pruned, so kept.
+        self._track(manifest, home, "shared/windows-only.txt", "shared_folder")
+
+        drive, saved, report = self._run(
+            tmp_path, monkeypatch, manifest, exclude_files=["*.log"]
+        )
+
+        assert sorted(drive.trash_calls) == [
+            "id:mixed/noise.log",
+            "id:shared/noise.log",
+        ]
+        assert set(saved.entries) == {"mixed/keep.txt", "shared/windows-only.txt"}
+        assert report["pruned_folders"] == []
+
+    def test_oversized_and_missing_files_keep_their_drive_copies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        write_tree(home, {"big/session.jsonl": "grew past the limit"})
+        manifest = Manifest()
+        self._track(manifest, home, "big/session.jsonl", "big_folder")
+        self._track(manifest, home, "gone/deleted.txt", "gone_folder")
+
+        drive, saved, report = self._run(
+            tmp_path,
+            monkeypatch,
+            manifest,
+            size_limits_by_type={".jsonl": 0.000001},
+        )
+
+        assert drive.trash_calls == []
+        assert set(saved.entries) == {"big/session.jsonl", "gone/deleted.txt"}
+        assert report["files_pruned"] == 0
+
+    def test_dry_run_reports_without_trashing_or_saving(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        write_tree(home, {"target/app.bin": "build"})
+        manifest = Manifest()
+        self._track(manifest, home, "target/app.bin", "target_folder")
+
+        drive, saved, report = self._run(
+            tmp_path, monkeypatch, manifest, dry_run=True, exclude_dirs=["target"]
+        )
+
+        assert drive.trash_calls == []
+        assert set(saved.entries) == {"target/app.bin"}
+        assert report["files_pruned"] == 1
+        assert report["pruned_folders"][0]["drive_folder_id"] == "target_folder"
+
+
+class TestBackupEngineEncryptionSwitch:
+    def test_plaintext_copy_is_trashed_when_file_becomes_encrypted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        write_tree(home, {"app/court.env": "TOKEN=abc"})
+        manifest_path = tmp_path / "state" / "manifest.json"
+        manifest = Manifest()
+        local = home / "app/court.env"
+        manifest.set(
+            relative_path="app/court.env",
+            md5=compute_md5(str(local)) or "",
+            size=local.stat().st_size,
+            mtime=local.stat().st_mtime,
+            drive_file_id="plaintext_id",
+            drive_parent_id="app_folder",
+            encrypted=False,
+        )
+        manifest.save(str(manifest_path))
+        drive = _PruneExcludedDrive()
+        monkeypatch.setattr("drive_backup.drive_api.DriveAPI", lambda **_: drive)
+        config = Config(
+            profile_name="laptop-a",
+            backup_root=str(home),
+            exclude_dirs=[],
+            exclude_files=[],
+            manifest_path=str(manifest_path),
+            secrets_key_path=str(tmp_path / "state" / "secrets.key"),
+        )
+
+        report = BackupEngine(config, collect_machine_state_snapshot=False).run()
+
+        assert "court.env.enc" in drive.uploaded
+        assert drive.trash_calls == ["plaintext_id"]
+        entry = Manifest.load(str(manifest_path)).get("app/court.env")
+        assert entry is not None
+        assert entry.encrypted is True
+        assert entry.drive_file_id == "new_court.env.enc"
+        assert report["files_prune_failed"] == 0

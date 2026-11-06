@@ -39,6 +39,13 @@ class PrunedFileRow(TypedDict):
     drive_file_id: str
     size_bytes: int
     size_human: str
+    reason: str
+
+
+class PrunedFolderRow(TypedDict):
+    relative_path: str
+    drive_folder_id: str
+    files: int
 
 
 class PruneErrorRow(TypedDict):
@@ -84,12 +91,14 @@ class BackupReport(TypedDict):
     drive_folder_url: str
     prune_enabled: bool
     prune_mode: str
+    prune_excluded_enabled: bool
     files_pruned: int
     files_prune_failed: int
     total_bytes_pruned: int
     total_size_pruned_human: str
     prune_skipped_reason: str
     pruned_files: list[PrunedFileRow]
+    pruned_folders: list[PrunedFolderRow]
     prune_error_files: list[PruneErrorRow]
     manifest_snapshot_downloaded: bool
     manifest_snapshot_uploaded: bool
@@ -140,12 +149,26 @@ class ErrorFile:
 
 @dataclass
 class PrunedFile:
-    """A Drive file that was (or will be) pruned."""
+    """A Drive file that was (or will be) pruned.
+
+    reason is "missing" (no longer exists locally) or "excluded" (exists
+    locally but the current config no longer backs it up).
+    """
 
     relative_path: str
     drive_file_id: str
     size_bytes: int
     size_human: str
+    reason: str = "missing"
+
+
+@dataclass
+class PrunedFolder:
+    """A Drive folder trashed whole because every file under it was excluded."""
+
+    relative_path: str
+    drive_folder_id: str
+    files: int
 
 
 @dataclass
@@ -182,11 +205,13 @@ class BackupStats:
     excluded_directories: list[str] = field(default_factory=list)
     prune_enabled: bool = False
     prune_mode: str = "flag"
+    prune_excluded_enabled: bool = False
     files_pruned: int = 0
     files_prune_failed: int = 0
     bytes_pruned: int = 0
     prune_skipped_reason: str = ""
     pruned_files: list[PrunedFile] = field(default_factory=list)
+    pruned_folders: list[PrunedFolder] = field(default_factory=list)
     prune_error_files: list[PruneError] = field(default_factory=list)
     manifest_snapshot_downloaded: bool = False
     manifest_snapshot_uploaded: bool = False
@@ -261,6 +286,7 @@ def generate_report(stats: BackupStats) -> BackupReport:
         "drive_folder_url": stats.drive_folder_url,
         "prune_enabled": stats.prune_enabled,
         "prune_mode": stats.prune_mode,
+        "prune_excluded_enabled": stats.prune_excluded_enabled,
         "files_pruned": stats.files_pruned,
         "files_prune_failed": stats.files_prune_failed,
         "total_bytes_pruned": stats.bytes_pruned,
@@ -272,8 +298,17 @@ def generate_report(stats: BackupStats) -> BackupReport:
                 "drive_file_id": pf.drive_file_id,
                 "size_bytes": pf.size_bytes,
                 "size_human": pf.size_human,
+                "reason": pf.reason,
             }
             for pf in stats.pruned_files
+        ],
+        "pruned_folders": [
+            {
+                "relative_path": folder.relative_path,
+                "drive_folder_id": folder.drive_folder_id,
+                "files": folder.files,
+            }
+            for folder in stats.pruned_folders
         ],
         "prune_error_files": [
             {

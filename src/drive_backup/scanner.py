@@ -43,6 +43,7 @@ class FileEntry:
 
 SECRETS_FILE_PATTERNS: list[str] = [
     ".env",
+    "*.env",  # Named env files (courtlistener.env)
     ".env.local",
     ".env.*.local",
     "credentials.json",
@@ -62,6 +63,7 @@ SECRETS_FILE_PATTERNS: list[str] = [
     ".netrc",
     ".git-credentials",
     ".pypirc",
+    "secrets.toml",  # App settings with passwords kept out of git (fella-fund)
 ]
 
 SECRETS_DIR_NAMES: set[str] = {
